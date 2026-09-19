@@ -107,6 +107,10 @@ def run_variant(
             model="recorded" if client.mocked else cfg.llm.model,
             base_url="" if client.mocked else cfg.llm.base_url,
             calls=getattr(client, "calls", 0),
+            prompt_tokens=getattr(client, "prompt_tokens", 0),
+            completion_tokens=getattr(client, "completion_tokens", 0),
+            retries=getattr(client, "retries", 0),
+            thinking_blocks=getattr(client, "thinking_blocks", 0),
             dropped_params=sorted(getattr(client, "dropped_params", ())),
             mocked=client.mocked,
         )
