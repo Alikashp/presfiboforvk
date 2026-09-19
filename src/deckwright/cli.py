@@ -88,6 +88,93 @@ def _cmd_run(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_probe(args: argparse.Namespace) -> int:
+    """Один живой вызов модели с полной диагностикой.
+
+    Нужна, чтобы убедиться, что endpoint настроен и отвечает так, как ждёт
+    пайплайн, до того как это выяснится посреди генерации колоды. Показывает
+    время, токены, повторы из-за невалидного ответа и блоки рассуждений —
+    то, по чему видно, годится ли модель и провайдер для бюджета в пять минут.
+    """
+    import time
+
+    cfg = load_config(args.config)
+    if not cfg.llm.configured:
+        print(
+            "Модель не настроена. Нужны LLM_BASE_URL, LLM_API_KEY и LLM_MODEL "
+            "(см. .env.example).",
+            file=sys.stderr,
+        )
+        return 1
+
+    from deckwright.llm.client import LiveClient
+    from deckwright.plan.planner import build_plan
+
+    pack = ContentPack.model_validate(
+        json.loads(Path(args.content).read_text(encoding="utf-8"))
+    )
+    client = LiveClient(cfg.llm)
+    slide_count = cfg.deck.slide_count or cfg.deck.min_slides
+
+    print(f"endpoint : {cfg.llm.base_url}")
+    print(f"модель   : {cfg.llm.model}")
+    params = cfg.llm.step("plan_deck")
+    print(
+        f"параметры: temperature={params.temperature} max_tokens={params.max_tokens} "
+        f"enable_thinking={params.enable_thinking} "
+        f"reasoning_effort={params.reasoning_effort or 'не задан'}"
+    )
+    print(f"слайдов  : {slide_count}\n")
+
+    started = time.monotonic()
+    failed = False
+    try:
+        plan, _ = build_plan(pack, client, slide_count)
+    except Exception as exc:  # диагностика обязана досказать, что произошло
+        failed = True
+        print(f"ОШИБКА: {exc}", file=sys.stderr)
+        plan = None
+    elapsed = round(time.monotonic() - started, 2)
+
+    print(f"время           : {elapsed} с")
+    print(f"вызовов         : {client.calls}")
+    print(f"повторов        : {client.retries}  (ответ не прошёл валидацию по схеме)")
+    print(f"блоков <think>  : {client.thinking_blocks}")
+    print(f"отброшено полей : {sorted(client.dropped_params) or 'нет'}")
+    print(
+        f"токенов         : вход {client.prompt_tokens}, "
+        f"выход {client.completion_tokens}, всего "
+        f"{client.prompt_tokens + client.completion_tokens}"
+    )
+
+    if args.price_in and args.price_out:
+        cost = (
+            client.prompt_tokens * args.price_in + client.completion_tokens * args.price_out
+        ) / 1_000_000
+        print(f"стоимость       : ${cost:.6f} за прогон (по заданным ценам за 1M токенов)")
+        print(f"  девять колод  : ${cost * 9:.4f}")
+    else:
+        print(
+            "стоимость       : цены не заданы. Передайте --price-in и --price-out "
+            "(за 1M токенов) со страницы тарифов провайдера."
+        )
+
+    if plan is not None:
+        print(f"\nплан: {plan.slide_count} слайдов")
+        for slide in plan.slides:
+            print(f"  {slide.index}. [{slide.intent.value}] {slide.takeaway_title}")
+        if args.save:
+            Path(args.save).parent.mkdir(parents=True, exist_ok=True)
+            Path(args.save).write_text(plan.model_dump_json(indent=2), encoding="utf-8")
+            print(f"\nплан сохранён: {args.save}")
+
+    if client.last_raw:
+        head = client.last_raw[:400].replace("\n", " ")
+        print(f"\nначало сырого ответа:\n  {head}")
+
+    return 1 if failed else 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="deckwright",
@@ -116,6 +203,20 @@ def main(argv: list[str] | None = None) -> int:
         help="Каталог записанных ответов модели: прогон без сети и без ключа.",
     )
     run.set_defaults(func=_cmd_run)
+
+    probe = sub.add_parser(
+        "probe", help="Один живой вызов модели с диагностикой: время, токены, повторы."
+    )
+    probe.add_argument("--config", default=str(DEFAULT_CONFIG), help="Путь к config.yaml.")
+    probe.add_argument("--content", required=True, help="Контент-пакет в JSON.")
+    probe.add_argument("--save", default=None, help="Куда сохранить полученный план.")
+    probe.add_argument(
+        "--price-in", type=float, default=None, help="Цена за 1M входных токенов."
+    )
+    probe.add_argument(
+        "--price-out", type=float, default=None, help="Цена за 1M выходных токенов."
+    )
+    probe.set_defaults(func=_cmd_probe)
 
     args = parser.parse_args(argv)
     return args.func(args)

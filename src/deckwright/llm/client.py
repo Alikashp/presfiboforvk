@@ -38,6 +38,12 @@ _UNKNOWN_PARAM = re.compile(
     r"(?:unknown|unsupported|unrecognized|invalid)[^\"']*[\"']?(\w+)[\"']?", re.IGNORECASE
 )
 
+# Блок рассуждений моделей семейства Qwen3. Мы его не вырезаем и не
+# обезвреживаем: если он пришёл, ответ не является чистым JSON, валидация
+# честно падает, и это видно в счётчике повторов. Сначала измеряем, потом
+# решаем, лечить ли — и чем.
+_THINKING_MARKERS = ("<think>", "</think>", "<thinking>")
+
 _SCHEMA_INSTRUCTION = (
     "Ответь строго одним объектом JSON по схеме ниже. "
     "Без пояснений, без markdown-ограждения.\n\nСхема:\n{schema}"
@@ -64,6 +70,13 @@ class LiveClient:
         )
         self.dropped_params: set[str] = set()
         self.calls = 0
+        self.prompt_tokens = 0
+        self.completion_tokens = 0
+        self.retries = 0
+        self.thinking_blocks = 0
+        # Последний сырой ответ: нужен диагностике `deckwright probe`, чтобы
+        # показать, что именно вернул endpoint, а не пересказ.
+        self.last_raw = ""
 
     def _extra_body(self, step: str) -> dict[str, object]:
         params = self._cfg.step(step)
@@ -116,7 +129,19 @@ class LiveClient:
                 extra_body=self._extra_body(step),
             )
         self.calls += 1
-        return response.choices[0].message.content or ""
+        usage = getattr(response, "usage", None)
+        if usage is not None:
+            self.prompt_tokens += getattr(usage, "prompt_tokens", 0) or 0
+            self.completion_tokens += getattr(usage, "completion_tokens", 0) or 0
+
+        content = response.choices[0].message.content or ""
+        # Некоторые провайдеры кладут рассуждения в отдельное поле, некоторые
+        # оставляют тегом внутри ответа. Считаем оба случая.
+        reasoning = getattr(response.choices[0].message, "reasoning_content", None)
+        if reasoning or any(marker in content for marker in _THINKING_MARKERS):
+            self.thinking_blocks += 1
+        self.last_raw = content
+        return content
 
     def _rejected_param(self, message: str) -> str | None:
         match = _UNKNOWN_PARAM.search(message)
@@ -141,6 +166,7 @@ class LiveClient:
                 return schema.model_validate_json(raw)
             except ValidationError as exc:
                 last_error = str(exc)
+                self.retries += 1
                 messages = [
                     *messages,
                     {"role": "assistant", "content": raw},
