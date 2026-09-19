@@ -38,8 +38,21 @@ class ModelUsage(BaseModel):
     # факт, влияющий на воспроизводимость на другом провайдере.
     dropped_params: list[str] = Field(default_factory=list)
     calls: int = Field(default=0, ge=0)
+    prompt_tokens: int = Field(default=0, ge=0)
+    completion_tokens: int = Field(default=0, ge=0)
+    # Повторы из-за ответа, не прошедшего валидацию по схеме. Каждый повтор —
+    # это лишние секунды в бюджете и лишние токены в счёте, поэтому цифра
+    # попадает в манифест, а не остаётся в логе.
+    retries: int = Field(default=0, ge=0)
+    # Ответы, в которых пришёл блок рассуждений. Модели семейства Qwen3 умеют
+    # его выдавать, и тогда ответ перестаёт быть чистым JSON.
+    thinking_blocks: int = Field(default=0, ge=0)
     # Записанные ответы вместо живой модели: e2e-прогон в CI идёт так.
     mocked: bool = False
+
+    @property
+    def total_tokens(self) -> int:
+        return self.prompt_tokens + self.completion_tokens
 
 
 class StageTiming(BaseModel):
