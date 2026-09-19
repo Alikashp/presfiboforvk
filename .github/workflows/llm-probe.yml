@@ -15,7 +15,10 @@ on:
       base_url:
         description: "Базовый URL OpenAI-совместимого endpoint'а"
         required: false
-        default: "https://api.siliconflow.cn/v1"
+        # У SiliconFlow два независимых сервиса, .com и .cn, с разными
+        # аккаунтами и невзаимозаменяемыми ключами. Здесь тот, на котором
+        # заведён аккаунт проекта.
+        default: "https://api.siliconflow.com/v1"
       price_in:
         description: "Цена за 1M входных токенов, USD (со страницы тарифов)"
         required: false
