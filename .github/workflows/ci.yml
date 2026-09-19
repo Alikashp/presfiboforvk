@@ -39,6 +39,56 @@ jobs:
       - name: Проверка окружения
         run: deckwright doctor
 
+  e2e:
+    name: сквозной прогон
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Системные зависимости
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libreoffice-impress poppler-utils libeot0 \
+            fonts-dejavu-core fonts-liberation fontconfig
+
+      - name: Установка
+        run: pip install -e ".[dev]"
+
+      # Шаблоны датасета в репозиторий не коммитятся: это чужие материалы на
+      # 58 МБ. Прогон идёт на синтетическом шаблоне, который заодно проверяет,
+      # что пайплайн не опирается на особенности присланных трёх.
+      - name: Синтетический шаблон
+        run: python tests/fixtures/make_template.py ci-templates/synthetic.pptx
+
+      # Модель замокана записанными ответами: без сети, без ключа,
+      # результат повторяем от прогона к прогону.
+      - name: Сквозной прогон и тесты
+        env:
+          DECKWRIGHT_TEMPLATES: ci-templates
+        run: pytest -q
+
+      - name: Прогон через CLI
+        run: |
+          deckwright run \
+            --template ci-templates/synthetic.pptx \
+            --content tests/fixtures/content_pack.json \
+            --recorded tests/fixtures/recorded \
+            --variant balanced \
+            --output ci-out
+
+      - name: Артефакты прогона
+        uses: actions/upload-artifact@v4
+        with:
+          name: deck-${{ github.sha }}
+          path: ci-out/
+          retention-days: 7
+
   image:
     name: docker build
     runs-on: ubuntu-latest
