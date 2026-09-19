@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.cache/
+
+# Секреты
+.env
+
+# Артефакты прогонов. Финальные демо добавляются принудительно:
+#   git add -f outputs/demo/...
+outputs/*
+!outputs/.gitkeep
+!outputs/demo/

@@ -1,0 +1,9 @@
+# Вариант «воздушный»: одна мысль на слайд, крупная типографика, числа — графиком.
+name: airy
+description: Мало блоков, крупная типографика, воздух, данные графиком.
+strategy:
+  slot_fill_target: 0.45
+  type_scale_bias: larger
+  data_viz_mode: chart
+  blocks_per_slide: 1
+  pattern_preference: [statement, chart, hero, section]

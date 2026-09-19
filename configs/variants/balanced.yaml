@@ -1,0 +1,9 @@
+# Вариант «сбалансированный»: середина шкалы по всем осям.
+name: balanced
+description: Умеренная плотность, смешанная подача данных.
+strategy:
+  slot_fill_target: 0.7
+  type_scale_bias: mid
+  data_viz_mode: auto
+  blocks_per_slide: 2
+  pattern_preference: [two_column, grid, chart, statement]

@@ -1,0 +1,105 @@
+# Единая точка воспроизводимого запуска.
+# Секреты сюда не пишутся: ${VAR} подставляется из окружения (.env).
+
+run:
+  seed: 20260101
+  # Каталог артефактов прогона. Внутри создаётся подкаталог по run_id.
+  output_dir: outputs
+  # Бюджет времени на колоду, секунды (ТЗ: не более 5 минут).
+  time_budget_seconds: 300
+  # Сколько слайдов собирать параллельно.
+  slide_workers: 4
+  # Предел итераций цикла «аудит → исправление → пересборка».
+  max_fix_iterations: 2
+
+template:
+  # Кэш разобранного TemplateSpec, ключ — хэш файла шаблона.
+  cache_dir: .cache/templates
+
+deck:
+  # Целевое число слайдов. null = решает планировщик в границах min..max.
+  slide_count: null
+  min_slides: 10
+  max_slides: 15
+  language: ru
+  # Назначение колоды: feature | product | project | initiative
+  purpose: product
+
+variants:
+  # Три варианта вёрстки — один пайплайн, разные пресеты стратегии.
+  - configs/variants/dense.yaml
+  - configs/variants/balanced.yaml
+  - configs/variants/airy.yaml
+
+llm:
+  base_url: ${LLM_BASE_URL}
+  api_key:  ${LLM_API_KEY}
+  model:    ${LLM_MODEL}
+  timeout_seconds: 120
+  max_retries: 3
+  # Параметры по шагам пайплайна. Режим рассуждений по умолчанию выключен;
+  # reasoning_effort уходит в запрос ТОЛЬКО если задан здесь явно.
+  # Параметр, который endpoint не поддерживает, отбрасывается и не роняет прогон
+  # (см. llm/client.py: отбрасывание по ответу 400 + запоминание на endpoint).
+  steps:
+    plan_deck:
+      temperature: 0.4
+      max_tokens: 6000
+      enable_thinking: false
+    shorten_text:
+      temperature: 0.2
+      max_tokens: 500
+      enable_thinking: false
+    audit_context:
+      temperature: 0.0
+      max_tokens: 1500
+      enable_thinking: false
+
+vlm:
+  base_url: ${VLM_BASE_URL}
+  api_key:  ${VLM_API_KEY}
+  model:    ${VLM_MODEL}
+  timeout_seconds: 120
+  max_retries: 2
+  steps:
+    layout_semantics:
+      temperature: 0.0
+      max_tokens: 800
+      enable_thinking: false
+    audit_context:
+      temperature: 0.0
+      max_tokens: 1500
+      enable_thinking: false
+
+# Слот под text-to-image. Задача со звёздочкой: интерфейс заложен,
+# реализация — после основного пайплайна.
+image_provider:
+  enabled: false
+  base_url: ${T2I_BASE_URL}
+  api_key:  ${T2I_API_KEY}
+  model:    ${T2I_MODEL}
+
+fonts:
+  # Куда распаковываются встроенные в шаблон шрифты перед рендером.
+  extract_dir: .cache/fonts
+  # Если распаковать не удалось — подставить метрически близкий и записать
+  # факт подстановки в манифест прогона и в находки аудита.
+  allow_substitution: true
+
+render:
+  soffice_binary: soffice
+  soffice_timeout_seconds: 180
+  png_dpi: 96
+
+audit:
+  contrast_min_ratio: 4.5
+  max_bullets_per_slide: 6
+  max_words_per_bullet: 15
+  max_table_rows: 7
+  max_table_cols: 5
+  max_chart_series: 5
+  min_fill_ratio: 0.25
+  max_fill_ratio: 0.75
+  # Контекстные проверки требуют VLM; без него выполняются только
+  # детерминированные, и это отражается в отчёте.
+  contextual_enabled: true

@@ -1,0 +1,15 @@
+services:
+  deckwright:
+    build: .
+    ports:
+      - "8501:8501"
+    # Фаза 10 заменит на: command: streamlit run app/ui.py --server.address=0.0.0.0
+    env_file:
+      - .env
+    volumes:
+      # Артефакты переживают пересборку образа.
+      - ./outputs:/app/outputs
+      - deckwright-cache:/app/.cache
+
+volumes:
+  deckwright-cache:
