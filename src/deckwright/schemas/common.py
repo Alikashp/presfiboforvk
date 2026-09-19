@@ -1,0 +1,173 @@
+"""Общие примитивы контрактов: геометрия, цвет, типографика, происхождение.
+
+Единица длины во всех схемах — **EMU** (English Metric Unit, 914400 на дюйм).
+Так OOXML хранит координаты, и так их отдаёт python-pptx. Пересчёт в пункты или
+пиксели делается только на границе — при рендере в HTML и при измерении текста,
+— чтобы округление не накапливалось внутри пайплайна.
+"""
+
+from __future__ import annotations
+
+import re
+from enum import StrEnum
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+EMU_PER_INCH = 914_400
+EMU_PER_POINT = 12_700
+
+_HEX_COLOR = re.compile(r"^[0-9A-F]{6}$")
+
+
+class Frozen(BaseModel):
+    """База для значений, которые после разбора шаблона не меняются."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+
+class Box(Frozen):
+    """Прямоугольник в EMU от левого верхнего угла слайда.
+
+    Все координаты абсолютные. Для фигур внутри группы это означает, что
+    трансформация группы (``a:xfrm`` с ``chOff``/``chExt``) уже применена —
+    иначе проверки «выход за границы» и «наложение блоков» считают не то.
+    """
+
+    x: int
+    y: int
+    w: int = Field(gt=0)
+    h: int = Field(gt=0)
+
+    @property
+    def right(self) -> int:
+        return self.x + self.w
+
+    @property
+    def bottom(self) -> int:
+        return self.y + self.h
+
+    @property
+    def area(self) -> int:
+        return self.w * self.h
+
+    def intersection(self, other: Box) -> Box | None:
+        x = max(self.x, other.x)
+        y = max(self.y, other.y)
+        r = min(self.right, other.right)
+        b = min(self.bottom, other.bottom)
+        if r <= x or b <= y:
+            return None
+        return Box(x=x, y=y, w=r - x, h=b - y)
+
+    def contains(self, other: Box) -> bool:
+        return (
+            other.x >= self.x
+            and other.y >= self.y
+            and other.right <= self.right
+            and other.bottom <= self.bottom
+        )
+
+
+class Color(Frozen):
+    """Цвет, приведённый к RGB, с памятью о том, как он был записан в шаблоне.
+
+    ``scheme`` хранит имя слота темы (``accent1``, ``dk1``…), если цвет пришёл
+    оттуда. Это нужно рендереру: цвет из темы правильнее записать обратно как
+    ``schemeClr``, чтобы он продолжил жить по правилам шаблона, а не застыл
+    отдельной константой.
+    """
+
+    rgb: str
+    scheme: str | None = None
+    alpha: float = Field(default=1.0, ge=0.0, le=1.0)
+
+    @field_validator("rgb", mode="before")
+    @classmethod
+    def _normalize(cls, v: object) -> object:
+        if isinstance(v, str):
+            v = v.strip().lstrip("#").upper()
+        return v
+
+    @field_validator("rgb")
+    @classmethod
+    def _check(cls, v: str) -> str:
+        if not _HEX_COLOR.match(v):
+            raise ValueError(f"ожидался RRGGBB, получено {v!r}")
+        return v
+
+    @property
+    def luminance(self) -> float:
+        """Относительная яркость по WCAG 2.1 — основа проверки контраста."""
+
+        def channel(value: int) -> float:
+            c = value / 255
+            return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+
+        r, g, b = (int(self.rgb[i : i + 2], 16) for i in (0, 2, 4))
+        return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b)
+
+    def contrast_ratio(self, other: Color) -> float:
+        a, b = sorted((self.luminance, other.luminance), reverse=True)
+        return (a + 0.05) / (b + 0.05)
+
+
+class Align(StrEnum):
+    LEFT = "left"
+    CENTER = "center"
+    RIGHT = "right"
+    JUSTIFY = "justify"
+
+
+class VAlign(StrEnum):
+    TOP = "top"
+    MIDDLE = "middle"
+    BOTTOM = "bottom"
+
+
+class TextStyle(Frozen):
+    """Начертание текста. Все значения взяты из шаблона, ни одного по умолчанию."""
+
+    font_family: str
+    size_pt: float = Field(gt=0)
+    bold: bool = False
+    italic: bool = False
+    color: Color
+    align: Align = Align.LEFT
+    valign: VAlign = VAlign.TOP
+    line_spacing: float = Field(default=1.0, gt=0)
+    space_before_pt: float = Field(default=0.0, ge=0)
+    space_after_pt: float = Field(default=0.0, ge=0)
+
+
+class SourceKind(StrEnum):
+    """Откуда в шаблоне взялось знание. Нужно, чтобы аудит мог объяснить находку."""
+
+    THEME = "theme"
+    MASTER = "master"
+    LAYOUT = "layout"
+    SLIDE = "slide"
+    DERIVED = "derived"
+    FALLBACK = "fallback"
+
+
+class Provenance(Frozen):
+    """Ссылка на место в шаблоне, откуда пришли геометрия или стиль.
+
+    Это то, что позволяет рендереру клонировать донорскую фигуру, а аудиту —
+    сказать «кегль 11 pt не из шкалы шаблона», а не просто «странный кегль».
+    """
+
+    kind: SourceKind
+    ref: str = ""
+    shape_id: str | None = None
+    confidence: float = Field(default=1.0, ge=0.0, le=1.0)
+    note: str = ""
+
+    @model_validator(mode="after")
+    def _fallback_is_never_certain(self) -> Provenance:
+        if self.kind is SourceKind.FALLBACK and self.confidence == 1.0:
+            raise ValueError(
+                "FALLBACK означает, что знания из шаблона не было: "
+                "confidence должен быть ниже 1.0"
+            )
+        return self
