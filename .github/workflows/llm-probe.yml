@@ -111,3 +111,7 @@ jobs:
           name: llm-probe-${{ github.run_number }}
           path: probe-out/
           retention-days: 14
+          # Диагностический прогон может упасть до записи результатов — например,
+          # если endpoint не принял ключ. Это не повод помечать шаг проблемным:
+          # сам отчёт уже в логе.
+          if-no-files-found: ignore

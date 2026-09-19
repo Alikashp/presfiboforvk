@@ -107,7 +107,7 @@ def _cmd_probe(args: argparse.Namespace) -> int:
         )
         return 1
 
-    from deckwright.llm.client import LiveClient
+    from deckwright.llm.client import LiveClient, probe_endpoint
     from deckwright.plan.planner import build_plan
 
     pack = ContentPack.model_validate(
@@ -125,6 +125,33 @@ def _cmd_probe(args: argparse.Namespace) -> int:
         f"reasoning_effort={params.reasoning_effort or 'не задан'}"
     )
     print(f"слайдов  : {slide_count}\n")
+
+    # Сначала проверяем ключ и наличие модели: 401 или неизвестное имя модели
+    # видно сразу и с подсказкой, а не как провал посреди генерации.
+    reachable, detail, available = probe_endpoint(cfg.llm)
+    print(f"ключ     : {detail}")
+    if available:
+        print(f"моделей  : {len(available)}")
+        if cfg.llm.model in available:
+            print(f"модель   : {cfg.llm.model} — доступна")
+        else:
+            needle = cfg.llm.model.split("/")[-1].lower()[:6]
+            close = [m for m in available if needle in m.lower()][:8]
+            print(f"модель   : {cfg.llm.model} — В СПИСКЕ НЕТ")
+            if close:
+                print("           похожие: " + ", ".join(close))
+    if not reachable:
+        print(
+            "\nEndpoint не принял ключ. Что проверить:\n"
+            "  1. У SiliconFlow два независимых сервиса: api.siliconflow.cn и\n"
+            "     api.siliconflow.com. Ключ одного на другом не работает.\n"
+            "  2. В значении секрета не должно быть пробелов, переносов строки\n"
+            "     и кавычек — только сам ключ.\n"
+            "  3. Ключ должен быть активен, а на счету должен быть баланс.",
+            file=sys.stderr,
+        )
+        return 1
+    print()
 
     started = time.monotonic()
     failed = False

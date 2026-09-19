@@ -25,7 +25,7 @@ import json
 import re
 from typing import TypeVar
 
-from openai import BadRequestError, OpenAI
+from openai import AuthenticationError, BadRequestError, OpenAI, OpenAIError
 from pydantic import BaseModel, ValidationError
 
 from deckwright.config import ModelConfig
@@ -48,6 +48,49 @@ _SCHEMA_INSTRUCTION = (
     "Ответь строго одним объектом JSON по схеме ниже. "
     "Без пояснений, без markdown-ограждения.\n\nСхема:\n{schema}"
 )
+
+
+def probe_endpoint(cfg: ModelConfig) -> tuple[bool, str, list[str]]:
+    """Проверяет, принимает ли endpoint ключ, и что у него есть из моделей.
+
+    Отдельный дешёвый запрос перед работой. Без него неверный ключ или
+    опечатка в имени модели вскрываются как провал посреди генерации, а
+    сообщение провайдера («Token is invalid») не подсказывает, что искать.
+
+    Возвращает (принял ли ключ, что показать пользователю, список моделей).
+    """
+    if not cfg.configured:
+        return False, "не настроен: нет base_url, api_key или model", []
+
+    # Ключ уходит в заголовок HTTP, а туда можно класть только ASCII. Символ,
+    # случайно попавший при копировании, иначе валит диагностику трейсбеком —
+    # ровно тогда, когда от неё нужно внятное объяснение.
+    try:
+        cfg.api_key.encode("ascii")
+    except UnicodeEncodeError:
+        return False, "содержит не-ASCII символы: похоже, скопирован с лишним знаком", []
+    if cfg.api_key != cfg.api_key.strip():
+        return False, "содержит пробелы или перенос строки по краям", []
+
+    client = OpenAI(
+        base_url=cfg.base_url, api_key=cfg.api_key, timeout=cfg.timeout_seconds, max_retries=0
+    )
+    try:
+        models = [model.id for model in client.models.list().data]
+    except AuthenticationError as exc:
+        return False, f"отклонён endpoint'ом ({_short(exc)})", []
+    except OpenAIError as exc:
+        # Список моделей отдают не все провайдеры; это не повод считать ключ
+        # плохим — просто проверить его заранее не вышло.
+        return True, f"проверить не удалось ({_short(exc)}), пробуем запрос", []
+    except Exception as exc:  # диагностика обязана объяснить, а не упасть
+        return True, f"проверить не удалось ({type(exc).__name__}: {_short(exc)})", []
+    return True, "принят", sorted(models)
+
+
+def _short(exc: Exception) -> str:
+    text = str(exc).strip().replace("\n", " ")
+    return text[:160]
 
 
 class LiveClient:
