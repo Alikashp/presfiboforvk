@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  gates:
+    name: ruff + pytest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      # Те же системные пакеты, что в образе: без них deckwright doctor
+      # и часть тестов проверяют не то окружение, в котором сервис работает.
+      - name: Системные зависимости
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libreoffice-impress poppler-utils libeot0 \
+            fonts-dejavu-core fonts-liberation fontconfig
+
+      - name: Установка
+        run: pip install -e ".[dev]"
+
+      - name: ruff
+        run: ruff check .
+
+      - name: pytest
+        run: pytest -q
+
+      - name: Проверка окружения
+        run: deckwright doctor
+
+  image:
+    name: docker build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Образ собирается целиком, включая `RUN deckwright doctor` внутри него.
+      # Сборка падает здесь, если в Dockerfile неверно назван системный пакет.
+      - name: Сборка образа
+        run: docker build -t deckwright:ci .
+
+      - name: Запуск проверки окружения в собранном образе
+        run: docker run --rm deckwright:ci
