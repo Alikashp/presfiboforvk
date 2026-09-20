@@ -20,15 +20,15 @@ on:
         # заведён аккаунт проекта.
         default: "https://api.siliconflow.com/v1"
       price_in:
-        description: "Цена за 1M входных токенов, USD (со страницы тарифов)"
+        description: "Перекрыть цену за 1M входных токенов, USD (пусто = из config.yaml)"
         required: false
         default: ""
       price_out:
-        description: "Цена за 1M выходных токенов, USD"
+        description: "Перекрыть цену за 1M выходных токенов, USD (пусто = из config.yaml)"
         required: false
         default: ""
       enable_thinking:
-        description: "Включить режим рассуждений"
+        description: "Включить режим рассуждений (проверить, снимается ли блок <think>)"
         required: false
         default: "false"
       full_run:
