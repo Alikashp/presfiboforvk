@@ -111,6 +111,10 @@ def run_variant(
             completion_tokens=getattr(client, "completion_tokens", 0),
             retries=getattr(client, "retries", 0),
             thinking_blocks=getattr(client, "thinking_blocks", 0),
+            rate_limit_hits=getattr(client, "rate_limit_hits", 0),
+            cost_usd=cfg.llm.cost_usd(
+                getattr(client, "prompt_tokens", 0), getattr(client, "completion_tokens", 0)
+            ),
             dropped_params=sorted(getattr(client, "dropped_params", ())),
             mocked=client.mocked,
         )

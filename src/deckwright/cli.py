@@ -176,17 +176,20 @@ def _cmd_probe(args: argparse.Namespace) -> int:
         f"{client.prompt_tokens + client.completion_tokens}"
     )
 
-    if args.price_in and args.price_out:
+    print(f"ответов 429     : {client.rate_limit_hits}")
+
+    # Цены берутся из конфига; аргументы командной строки их перекрывают, если
+    # у провайдера другой тариф.
+    price_in = args.price_in if args.price_in is not None else cfg.llm.price_per_1m_input
+    price_out = args.price_out if args.price_out is not None else cfg.llm.price_per_1m_output
+    if price_in or price_out:
         cost = (
-            client.prompt_tokens * args.price_in + client.completion_tokens * args.price_out
+            client.prompt_tokens * price_in + client.completion_tokens * price_out
         ) / 1_000_000
-        print(f"стоимость       : ${cost:.6f} за прогон (по заданным ценам за 1M токенов)")
-        print(f"  девять колод  : ${cost * 9:.4f}")
+        print(f"стоимость       : ${cost:.6f} за вызов (${price_in}/${price_out} за 1M)")
+        print(f"  три шаблона   : ${cost * 3:.4f}  (планирование по разу на шаблон)")
     else:
-        print(
-            "стоимость       : цены не заданы. Передайте --price-in и --price-out "
-            "(за 1M токенов) со страницы тарифов провайдера."
-        )
+        print("стоимость       : цены не заданы ни в конфиге, ни аргументами")
 
     if plan is not None:
         print(f"\nплан: {plan.slide_count} слайдов")
