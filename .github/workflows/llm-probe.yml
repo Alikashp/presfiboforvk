@@ -93,6 +93,20 @@ jobs:
             --save probe-out/plan_deck.json \
             $ARGS
 
+      # Артефакт лежит на хранилище, куда закрыт доступ из среды разработки,
+      # поэтому полученный план дублируется в лог: оттуда его можно взять как
+      # настоящую фикстуру вместо рукописной.
+      - name: Полученный план целиком
+        if: always()
+        run: |
+          if [ -f probe-out/plan_deck.json ]; then
+            echo "----- НАЧАЛО plan_deck.json -----"
+            cat probe-out/plan_deck.json
+            echo "----- КОНЕЦ plan_deck.json -----"
+          else
+            echo "плана нет: диагностический вызов не дошёл до сохранения"
+          fi
+
       - name: Сквозной прогон на живой модели
         if: ${{ inputs.full_run == 'true' }}
         env:
