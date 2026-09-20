@@ -51,6 +51,12 @@ class ModelConfig(BaseModel):
     # Значение консервативное: провайдеры ограничивают частоту запросов, и
     # упереться в 429 дороже, чем идти на восьми потоках.
     max_concurrent_calls: int = Field(default=8, gt=0)
+    # Лимиты провайдера за минуту. Ноль = не ограничивать: у собственного
+    # инференса лимитов может не быть, и требовать число там незачем.
+    # Узкое место — токены, а не запросы: на тарифе L0 SiliconFlow это
+    # 1000 запросов против 40 000 токенов в минуту.
+    tokens_per_minute: int = Field(default=0, ge=0)
+    requests_per_minute: int = Field(default=0, ge=0)
     steps: dict[str, StepParams] = Field(default_factory=dict)
 
     def cost_usd(self, prompt_tokens: int, completion_tokens: int) -> float:
@@ -132,6 +138,9 @@ class AuditConfig(BaseModel):
     min_fill_ratio: float = Field(default=0.25, ge=0, le=1)
     max_fill_ratio: float = Field(default=0.75, ge=0, le=1)
     contextual_enabled: bool = True
+    contextual_dpi: int = Field(default=96, gt=0)
+    skip_unchanged_slides: bool = True
+    text_checks_once_per_deck: bool = True
 
     @model_validator(mode="after")
     def _check_fill(self) -> AuditConfig:
