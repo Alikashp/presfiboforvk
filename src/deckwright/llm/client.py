@@ -25,11 +25,18 @@ import json
 import re
 from typing import TypeVar
 
-from openai import AuthenticationError, BadRequestError, OpenAI, OpenAIError
+from openai import (
+    AuthenticationError,
+    BadRequestError,
+    OpenAI,
+    OpenAIError,
+    RateLimitError,
+)
 from pydantic import BaseModel, ValidationError
 
 from deckwright.config import ModelConfig
 from deckwright.llm.base import StructuredError
+from deckwright.llm.response import has_reasoning, strip_wrapping
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -37,12 +44,6 @@ T = TypeVar("T", bound=BaseModel)
 _UNKNOWN_PARAM = re.compile(
     r"(?:unknown|unsupported|unrecognized|invalid)[^\"']*[\"']?(\w+)[\"']?", re.IGNORECASE
 )
-
-# Блок рассуждений моделей семейства Qwen3. Мы его не вырезаем и не
-# обезвреживаем: если он пришёл, ответ не является чистым JSON, валидация
-# честно падает, и это видно в счётчике повторов. Сначала измеряем, потом
-# решаем, лечить ли — и чем.
-_THINKING_MARKERS = ("<think>", "</think>", "<thinking>")
 
 _SCHEMA_INSTRUCTION = (
     "Ответь строго одним объектом JSON по схеме ниже. "
@@ -117,6 +118,9 @@ class LiveClient:
         self.completion_tokens = 0
         self.retries = 0
         self.thinking_blocks = 0
+        # Ответы 429. SDK сам повторяет их с выдержкой; счётчик нужен, чтобы
+        # было видно, упёрлись ли мы в лимит провайдера, а не гадать по времени.
+        self.rate_limit_hits = 0
         # Последний сырой ответ: нужен диагностике `deckwright probe`, чтобы
         # показать, что именно вернул endpoint, а не пересказ.
         self.last_raw = ""
@@ -157,6 +161,10 @@ class LiveClient:
                 response_format={"type": "json_object"},
                 extra_body=self._extra_body(step),
             )
+        except RateLimitError:
+            # SDK уже исчерпал свои повторы; отмечаем и передаём выше.
+            self.rate_limit_hits += 1
+            raise
         except BadRequestError as exc:
             rejected = self._rejected_param(str(exc))
             if rejected is None:
@@ -181,7 +189,7 @@ class LiveClient:
         # Некоторые провайдеры кладут рассуждения в отдельное поле, некоторые
         # оставляют тегом внутри ответа. Считаем оба случая.
         reasoning = getattr(response.choices[0].message, "reasoning_content", None)
-        if reasoning or any(marker in content for marker in _THINKING_MARKERS):
+        if reasoning or has_reasoning(content):
             self.thinking_blocks += 1
         self.last_raw = content
         return content
@@ -206,7 +214,7 @@ class LiveClient:
         for _ in range(self._cfg.max_retries + 1):
             raw = self._ask(step, messages)
             try:
-                return schema.model_validate_json(raw)
+                return schema.model_validate_json(strip_wrapping(raw))
             except ValidationError as exc:
                 last_error = str(exc)
                 self.retries += 1

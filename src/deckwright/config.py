@@ -42,7 +42,27 @@ class ModelConfig(BaseModel):
     model: str = ""
     timeout_seconds: int = Field(default=120, gt=0)
     max_retries: int = Field(default=3, ge=0)
+    # Цены провайдера за миллион токенов. Нужны, чтобы прогон сам считал
+    # стоимость, а не оставлял это умножению в уме.
+    price_per_1m_input: float = Field(default=0.0, ge=0)
+    price_per_1m_output: float = Field(default=0.0, ge=0)
+    # Сколько запросов к этой модели идёт одновременно. Контекстный аудит
+    # делает по вызову на слайд, и последовательно это не влезает в бюджет.
+    # Значение консервативное: провайдеры ограничивают частоту запросов, и
+    # упереться в 429 дороже, чем идти на восьми потоках.
+    max_concurrent_calls: int = Field(default=8, gt=0)
     steps: dict[str, StepParams] = Field(default_factory=dict)
+
+    def cost_usd(self, prompt_tokens: int, completion_tokens: int) -> float:
+        """Стоимость по ценам из конфига. Без цен — ноль, а не выдумка."""
+        return (
+            prompt_tokens * self.price_per_1m_input
+            + completion_tokens * self.price_per_1m_output
+        ) / 1_000_000
+
+    @property
+    def has_prices(self) -> bool:
+        return self.price_per_1m_input > 0 or self.price_per_1m_output > 0
 
     @property
     def configured(self) -> bool:

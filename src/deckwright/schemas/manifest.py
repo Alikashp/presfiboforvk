@@ -44,6 +44,8 @@ class ModelUsage(BaseModel):
     # это лишние секунды в бюджете и лишние токены в счёте, поэтому цифра
     # попадает в манифест, а не остаётся в логе.
     retries: int = Field(default=0, ge=0)
+    rate_limit_hits: int = Field(default=0, ge=0)
+    cost_usd: float = Field(default=0.0, ge=0)
     # Ответы, в которых пришёл блок рассуждений. Модели семейства Qwen3 умеют
     # его выдавать, и тогда ответ перестаёт быть чистым JSON.
     thinking_blocks: int = Field(default=0, ge=0)
@@ -94,6 +96,10 @@ class RunManifest(BaseModel):
     @property
     def total_seconds(self) -> float:
         return round(sum(t.seconds for t in self.timings), 3)
+
+    @property
+    def total_cost_usd(self) -> float:
+        return round(sum(m.cost_usd for m in self.models), 6)
 
     def within_budget(self, budget_seconds: int) -> bool:
         """Уложился ли прогон в бюджет времени из конфига (A18)."""
