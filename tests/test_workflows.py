@@ -93,3 +93,57 @@ def test_probe_runs_end_to_end_on_recorded_answers(monkeypatch, tmp_path, record
     )
     assert code == 0, "проба завершилась ошибкой на записанных ответах"
     assert saved.exists(), "план не сохранён"
+
+
+# ── Образ и CI обязаны ставить одно и то же ──────────────────────────────────
+#
+# `deckwright doctor` идёт и в сборке образа, и в обычном CI, и проверяет
+# одни и те же системные пакеты. Разъезжаются эти два списка молча: пакет
+# добавлен в Dockerfile, в CI забыт, и проверка падает на раннере, где её
+# требование не выполнено. Ровно это и случилось, когда в образ приехали
+# метрические клоны шрифтов.
+
+
+def _apt_packages(text: str) -> set[str]:
+    """Пакеты из всех `apt-get install` в файле.
+
+    Строки склеиваются по переносу `\\`, потому что и в Dockerfile, и в
+    workflow список пакетов разложен по строкам.
+    """
+    joined: list[str] = []
+    buffer = ""
+    for line in text.splitlines():
+        buffer += line.rstrip()
+        if buffer.endswith("\\"):
+            buffer = buffer[:-1] + " "
+            continue
+        joined.append(buffer)
+        buffer = ""
+    if buffer:
+        joined.append(buffer)
+
+    packages: set[str] = set()
+    for line in joined:
+        if "apt-get install" not in line:
+            continue
+        tail = line.split("apt-get install", 1)[1]
+        # Всё после `&&` — уже следующая команда, пакетов там нет.
+        tail = tail.split("&&", 1)[0]
+        for word in tail.split():
+            if word.startswith("-"):
+                continue
+            packages.add(word)
+    return packages
+
+
+def test_ci_installs_the_same_system_packages_as_the_image():
+    root = Path(__file__).resolve().parents[1]
+    image = _apt_packages((root / "Dockerfile").read_text("utf-8"))
+    ci = _apt_packages((root / ".github" / "workflows" / "ci.yml").read_text("utf-8"))
+
+    assert image, "в Dockerfile не нашлось ни одного apt-пакета: разбор сломался"
+    missing = image - ci
+    assert not missing, (
+        f"в образе есть, в CI нет: {sorted(missing)}. deckwright doctor идёт в "
+        "обоих местах и проверяет одно и то же — списки обязаны совпадать"
+    )

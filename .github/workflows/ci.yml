@@ -25,7 +25,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             libreoffice-impress poppler-utils libeot0 \
-            fonts-dejavu-core fonts-liberation fontconfig
+            fonts-dejavu-core fonts-liberation \
+            fonts-crosextra-carlito fonts-crosextra-caladea fontconfig
 
       - name: Установка
         run: pip install -e ".[dev]"
@@ -55,7 +56,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             libreoffice-impress poppler-utils libeot0 \
-            fonts-dejavu-core fonts-liberation fontconfig
+            fonts-dejavu-core fonts-liberation \
+            fonts-crosextra-carlito fonts-crosextra-caladea fontconfig
 
       - name: Установка
         run: pip install -e ".[dev]"
