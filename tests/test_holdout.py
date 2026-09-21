@@ -149,8 +149,11 @@ def test_deck_generates_on_an_adversarial_template(variant, synthetic, recorded_
     assert check_package(result.pptx).ok
     assert slide_is_single_image(result.pptx) == []
     reopened = Presentation(str(result.pptx))
-    assert len(reopened.slides._sldIdLst) == result.plan.slide_count
-    assert len(result.pages) == result.plan.slide_count
+    # Фиттер имеет право разбить переполненный слайд надвое, но не потерять.
+    built = len(result.deck.slides)
+    assert built >= result.plan.slide_count
+    assert len(reopened.slides._sldIdLst) == built
+    assert len(result.pages) == built
 
 
 def test_deck_generates_on_the_real_holdout(real_holdouts, recorded_dir, tmp_path):

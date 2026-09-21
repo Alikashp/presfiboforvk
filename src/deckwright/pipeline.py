@@ -45,6 +45,7 @@ class PipelineResult:
         spec: TemplateSpec,
         plan: DeckPlan,
         deck: DeckIR,
+        layout_issues: list,
         pptx: Path,
         pdf: Path,
         pages: list[Path],
@@ -53,6 +54,7 @@ class PipelineResult:
         self.spec = spec
         self.plan = plan
         self.deck = deck
+        self.layout_issues = layout_issues
         self.pptx = pptx
         self.pdf = pdf
         self.pages = pages
@@ -167,7 +169,17 @@ def run_variant(
     )
 
     with _timed(manifest, "layout"):
-        deck = build_deck_ir(spec, plan, variant)
+        # Вариант передаётся пресетом, а не именем: плотность, предпочтение
+        # композиций и поведение при переполнении — это он и есть.
+        try:
+            preset = cfg.variant(variant)
+        except KeyError:
+            preset = variant
+        deck, layout_issues = build_deck_ir(spec, plan, preset)
+    # Находки вёрстки о самой себе едут дальше вместе с колодой: текст, не
+    # влезший на минимальной ступени шкалы, обязан быть виден, а не обрезан
+    # молча.
+    manifest.warnings.extend(issue.message for issue in layout_issues)
 
     stem = f"{template_path.stem}_{variant}"
     with _timed(manifest, "render_pptx"):
@@ -209,4 +221,6 @@ def run_variant(
     (output_dir / f"{stem}.manifest.json").write_text(
         manifest.model_dump_json(indent=2), encoding="utf-8"
     )
-    return PipelineResult(spec, plan, deck, pptx_path, pdf_path, pages, manifest)
+    return PipelineResult(
+        spec, plan, deck, layout_issues, pptx_path, pdf_path, pages, manifest
+    )

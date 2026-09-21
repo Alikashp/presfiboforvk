@@ -50,12 +50,18 @@ def test_pipeline_produces_all_three_artifacts(result):
 
 
 def test_slide_counts_agree_across_formats(result):
-    """Расхождение числа слайдов между планом, .pptx и .pdf означает, что
-    какой-то слой потерял или удвоил слайд."""
-    planned = result.plan.slide_count
-    assert len(result.deck.slides) == planned
-    assert len(Presentation(str(result.pptx)).slides._sldIdLst) == planned
-    assert len(result.pages) == planned
+    """Расхождение числа слайдов между `.pptx` и `.pdf` означает, что какой-то
+    слой потерял или удвоил слайд.
+
+    С планом число сходится не всегда, и это не поломка: фиттер имеет право
+    разбить переполненный слайд надвое, если это убирает переполнение. Чего
+    он не имеет права — потерять слайд, поэтому колода обязана быть не короче
+    плана.
+    """
+    built = len(result.deck.slides)
+    assert built >= result.plan.slide_count, "вёрстка потеряла слайд плана"
+    assert len(Presentation(str(result.pptx)).slides._sldIdLst) == built
+    assert len(result.pages) == built
 
 
 def test_package_is_intact(result):
@@ -138,4 +144,4 @@ def test_pipeline_works_on_every_available_template(template_paths, pack, record
             output_dir=tmp_path / f"t{index}",
         )
         assert check_package(outcome.pptx).ok, path.name
-        assert len(outcome.pages) == outcome.plan.slide_count, path.name
+        assert len(outcome.pages) == len(outcome.deck.slides), path.name

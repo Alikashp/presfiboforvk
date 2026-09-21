@@ -1,30 +1,42 @@
-"""Раскладка плана по шаблону. Скелетная версия слоя layout.
+"""Вёрстка: план + шаблон → `DeckIR`.
 
-Выбирает layout под намерение слайда и раскладывает блоки плана по его
-плейсхолдерам, а чего не хватило — ставит в свободную область внутри полей.
+Слайд раскладывается на композицию шаблона, а не рисуется заново. Композиция
+(`Pattern`) снята с настоящего слайда-примера и несёт `donor_slide_index` —
+то, откуда рендерер потом клонирует поддерево фигур. Так оформление, ради
+которого шаблон и берут, достаётся даром; нарисованное заново было бы «похоже
+на шаблон», а это не то же самое.
 
-Скелетная версия намеренно проста: первый подходящий layout по числу
-контентных слотов. Фаза 6 заменит это матчером по блочной сигнатуре с учётом
-`LayoutStrategy`, фиттером текста по метрикам шрифта и клонированием паттернов
-вместо плейсхолдеров.
+Выбор композиции идёт **по структуре**: у слайда есть набор нужных мест
+(«заголовок, список, график»), у композиции — набор имеющихся. Класс
+композиции поднимает её в выдаче, но неопознанный класс не исключает её
+вовсе: на чужом шаблоне правила не опознают заметную долю композиций, и
+выбрасывать их значит добровольно обеднить вёрстку.
 
-Что уже здесь по-настоящему: цвет текста выбирается по яркости фона, а не
-берётся чёрным. На тёмном шаблоне чёрный текст по чёрному фону — не
-теоретический риск, а то, что получилось при первом же прогоне на
-`vk_workspace`.
+Если ни одна композиция не подошла, работает запасной путь по layout'ам —
+плейсхолдеры есть даже у шаблона без слайдов-примеров.
 """
 
 from __future__ import annotations
 
+from deckwright.layout.fitter import FitResult, fit_paragraphs, fit_size, split_blocks
+from deckwright.layout.strategy import Strategy, ladder_for_role
+from deckwright.layout.text_metrics import FontMetrics, metrics_for_spec
 from deckwright.schemas import (
     Box,
+    CheckKind,
     Color,
     DeckIR,
     Element,
     ElementKind,
+    FixKind,
+    Issue,
+    IssueCategory,
     LayoutSpec,
     Paragraph,
+    Pattern,
+    ProposedFix,
     Provenance,
+    Severity,
     SlideIntent,
     SlideIR,
     SlidePlan,
@@ -35,84 +47,323 @@ from deckwright.schemas import (
     TextStyle,
 )
 
-# Намерение слайда → роли, которые ему нужны от layout'а. На этом проходе
-# различаются только «нужен ли контентный слот помимо заголовка».
+# Намерения, которым хватает одного заголовка.
 _BARE_INTENTS = frozenset({SlideIntent.TITLE, SlideIntent.SECTION, SlideIntent.CLOSING})
 
+# Роли, куда можно положить содержание. Подпись и подпись к числу входят
+# сюда наравне с телом текста: в карточке шаблона содержание живёт именно в
+# них, и без них композиция из трёх карточек выглядит для вёрстки пустой.
 _CONTENT_ROLES = frozenset(
-    {SlotRole.BODY, SlotRole.BULLETS, SlotRole.CHART, SlotRole.TABLE, SlotRole.IMAGE}
+    {
+        SlotRole.BODY,
+        SlotRole.BULLETS,
+        SlotRole.CAPTION,
+        SlotRole.CHART,
+        SlotRole.TABLE,
+        SlotRole.IMAGE,
+        SlotRole.KPI_VALUE,
+        SlotRole.KPI_LABEL,
+        SlotRole.QUOTE,
+    }
 )
 
-# Доля кегля шкалы: заголовок берёт верх шкалы, тело — середину.
-_TITLE_SCALE_INDEX = -2
-_BODY_SCALE_INDEX = 1
+# Роли, которые годятся под текст, если запрошенной не нашлось. Порядок —
+# порядок предпочтения: список охотнее ложится в список, чем в абзац.
+_TEXT_FALLBACK: dict[SlotRole, tuple[SlotRole, ...]] = {
+    SlotRole.BULLETS: (SlotRole.BODY, SlotRole.CAPTION, SlotRole.KPI_LABEL),
+    SlotRole.BODY: (SlotRole.BULLETS, SlotRole.CAPTION, SlotRole.KPI_LABEL),
+    SlotRole.CAPTION: (SlotRole.BODY, SlotRole.BULLETS, SlotRole.KPI_LABEL),
+    SlotRole.QUOTE: (SlotRole.BODY, SlotRole.BULLETS, SlotRole.CAPTION),
+    SlotRole.KPI_VALUE: (SlotRole.BODY, SlotRole.CAPTION, SlotRole.KPI_LABEL),
+    SlotRole.CHART: (SlotRole.IMAGE, SlotRole.TABLE, SlotRole.BODY),
+    SlotRole.TABLE: (SlotRole.CHART, SlotRole.BODY, SlotRole.BULLETS),
+    SlotRole.IMAGE: (SlotRole.CHART,),
+}
 
 
 class LayoutError(RuntimeError):
     """Шаблон не даёт ни одного места, куда положить содержание."""
 
 
-def _content_slots(layout: LayoutSpec) -> list:
-    return [s for s in layout.slots if s.role in _CONTENT_ROLES]
+# ── Подбор места ─────────────────────────────────────────────────────────────
 
 
-def _title_slot(layout: LayoutSpec):
-    for slot in layout.slots:
+def needed_profile(plan_slide: SlidePlan, strategy: Strategy) -> dict[SlotRole, int]:
+    """Какие места нужны этому слайду. Это и есть его блочная сигнатура.
+
+    Сигнатура строится из плана, а не из текста: во что превратится числовой
+    ряд — график, таблицу или крупное число — решает вариант, и у трёх
+    вариантов одного слайда сигнатуры законно разные.
+    """
+    profile: dict[SlotRole, int] = {SlotRole.TITLE: 1}
+    for block in plan_slide.blocks:
+        role = strategy.role_for(block)
+        profile[role] = profile.get(role, 0) + 1
+    return profile
+
+
+def _title_fits(
+    pattern: Pattern,
+    plan_slide: SlidePlan,
+    strategy: Strategy,
+    metrics: FontMetrics | None,
+    ladder: list[float],
+) -> bool:
+    """Влезает ли заголовок слайда в заголовочную рамку этой композиции.
+
+    Меряем до выбора, а не после. Композиция с узкой заголовочной рамкой
+    посреди слайда годится для «Итоги», но не для формулировки в семь слов, и
+    узнать это дешевле сейчас: потом останется только завести находку.
+    """
+    if metrics is None:
+        return True
+    slot = _title_slot(pattern)
+    if slot is None:
+        return False
+    declared = slot.style.size_pt if slot.style is not None else (ladder[-1] if ladder else 18.0)
+    start = strategy.start_size(ladder, declared)
+    return fit_size(plan_slide.takeaway_title, metrics, slot.box, ladder, start).fits
+
+
+def pick_pattern(
+    spec: TemplateSpec,
+    plan_slide: SlidePlan,
+    strategy: Strategy,
+    used: set[str] | None = None,
+    metrics: FontMetrics | None = None,
+    title_ladder: list[float] | None = None,
+) -> Pattern | None:
+    """Композиция под сигнатуру слайда, или None, если такой нет.
+
+    Среди одинаково подходящих предпочитается та, которой колода ещё не
+    пользовалась. Без этого все десять слайдов ложатся в одну и ту же
+    композицию: `patterns_matching` возвращает устойчивый порядок, а слайды
+    с одинаковой сигнатурой берут из него первый. Колода из десяти
+    одинаковых слайдов формально верна и практически бесполезна — шаблон
+    даёт десятки композиций именно затем, чтобы презентация не выглядела
+    одним слайдом, повторённым десять раз.
+    """
+    used = used or set()
+    title_ladder = title_ladder or []
+    needed = needed_profile(plan_slide, strategy)
+
+    def best_of(candidates: list[Pattern]) -> Pattern:
+        """Из подходящих — та, где влезает заголовок и которой ещё не было."""
+        roomy = [
+            pattern
+            for pattern in candidates
+            if _title_fits(pattern, plan_slide, strategy, metrics, title_ladder)
+        ] or candidates
+        fresh = [pattern for pattern in roomy if pattern.id not in used]
+        return (fresh or roomy)[0]
+    preferred = None
+    for candidate in strategy.pattern_preference:
+        matches = spec.patterns_matching(needed, preferred=candidate)
+        if matches and matches[0].pattern_class is candidate:
+            preferred = candidate
+            break
+
+    # Строгая сигнатура: паттерн обязан дать ровно то, что просят.
+    matches = [
+        pattern
+        for pattern in spec.patterns_matching(needed, preferred=preferred)
+        if _usable_slots(pattern, spec.slide_width_emu, spec.slide_height_emu)
+    ]
+    if matches:
+        return best_of(matches)
+
+    # Мягкий подбор: заголовок плюс сколько-нибудь мест. Здесь порядок решает
+    # не класс, а **сколько блоков паттерн реально усадит**. Иначе выбирается
+    # композиция с единственным местом под картинку, два текстовых блока не
+    # находят себе рамки и ложатся друг на друга в запасной области.
+    wanted = [role for role, count in needed.items() if role is not SlotRole.TITLE
+              for _ in range(count)]
+    relaxed = [
+        pattern
+        for pattern in spec.patterns_matching({SlotRole.TITLE: 1}, preferred=preferred)
+        if _usable_slots(pattern, spec.slide_width_emu, spec.slide_height_emu)
+    ]
+    if not relaxed:
+        return None
+
+    def seats(pattern: Pattern) -> int:
+        free = _usable_slots(pattern, spec.slide_width_emu, spec.slide_height_emu)
+        return sum(1 for role in wanted if _assign(free, role) is not None)
+
+    best = max(seats(pattern) for pattern in relaxed)
+    return best_of([pattern for pattern in relaxed if seats(pattern) == best])
+
+
+def _on_slide(box: Box, width: int, height: int) -> bool:
+    """Помещается ли рамка на слайде целиком."""
+    return box.x >= 0 and box.y >= 0 and box.right <= width and box.bottom <= height
+
+
+def _usable_slots(pattern: Pattern, slide_w: int, slide_h: int) -> list:
+    """Слоты композиции, куда можно положить содержание, в порядке чтения.
+
+    Повторители раскрываются в свои места: сетка из четырёх карточек даёт
+    четыре комплекта слотов, и содержание раскладывается по ним.
+
+    Раскрытие обрывается краем слайда. `max_count` — оценка того, сколько
+    элементов выдержит сетка, и она бывает щедрее слайда: на `vk_education`
+    пятая карточка уезжала на полтора дюйма за правый край. Место, которого
+    на слайде нет, — не место.
+
+    Слоты, выходящие за край в самом шаблоне, тоже отбрасываются: содержание
+    в них гарантированно даст находку «текст за границей слайда».
+    """
+    slots = [
+        s
+        for s in pattern.slots
+        if s.role in _CONTENT_ROLES and _on_slide(s.box, slide_w, slide_h)
+    ]
+    for repeater in pattern.repeaters:
+        horizontal = repeater.axis != "vertical"
+        for index in range(repeater.max_count):
+            offset = index * repeater.pitch_emu
+            expanded = []
+            for slot in repeater.item_slots:
+                if slot.role not in _CONTENT_ROLES:
+                    continue
+                box = Box(
+                    x=slot.box.x + (offset if horizontal else 0),
+                    y=slot.box.y + (0 if horizontal else offset),
+                    w=slot.box.w,
+                    h=slot.box.h,
+                )
+                if not _on_slide(box, slide_w, slide_h):
+                    expanded = []
+                    break
+                expanded.append(
+                    slot.model_copy(
+                        update={"id": f"{repeater.id}_{index}_{slot.id}", "box": box}
+                    )
+                )
+            if not expanded:
+                # Этот элемент сетки уже не на слайде — следующие тем более.
+                break
+            slots.extend(expanded)
+    return sorted(slots, key=lambda s: (s.box.y, s.box.x))
+
+
+def _title_slot(container):
+    for slot in container.slots:
         if slot.role is SlotRole.TITLE:
             return slot
     return None
 
 
 def pick_layout(spec: TemplateSpec, plan_slide: SlidePlan) -> LayoutSpec:
-    """Первый layout, чья структура не противоречит намерению слайда.
-
-    Титул, разделитель и финал довольствуются одним заголовком; остальным
-    нужен хотя бы один контентный слот, а если таких layout'ов в шаблоне нет —
-    берём любой с заголовком и ставим содержание в свободную область.
-    """
+    """Запасной путь: layout, чья структура не противоречит намерению."""
     if not spec.layouts:
         raise LayoutError(f"в шаблоне {spec.source_name!r} нет ни одного layout'а")
 
     with_title = [layout for layout in spec.layouts if _title_slot(layout) is not None]
     candidates = with_title or spec.layouts
-
     if plan_slide.intent in _BARE_INTENTS:
         return candidates[0]
-
-    with_content = [layout for layout in candidates if _content_slots(layout)]
+    with_content = [
+        layout
+        for layout in candidates
+        if any(slot.role in _CONTENT_ROLES for slot in layout.slots)
+    ]
     return (with_content or candidates)[0]
 
 
-def _scale(spec: TemplateSpec, index: int) -> float:
-    scale = spec.type_scale_pt or [18.0]
-    return scale[max(-len(scale), min(index, len(scale) - 1))]
+# Какую долю меньшей из двух рамок разрешено перекрыть, прежде чем считать,
+# что они налезли друг на друга. Ноль здесь не годится: рамки шаблона
+# соприкасаются краями на пиксель сплошь и рядом.
+_OVERLAP_TOLERANCE = 0.15
+
+# Минимальная высота полосы под блок без слота. Меньше этого рамка не
+# удерживает и одной строки, и фиттер честно заведёт находку о переполнении.
+_MIN_BAND_SHARE_DIVISOR = 274_320  # 0.3 дюйма
 
 
-def _text_color(layout: LayoutSpec, role: SlotRole) -> Color:
-    """Цвет текста для роли — взятый из самого шаблона.
+def _overlaps(a: Box, b: Box) -> bool:
+    """Существенно ли перекрываются две рамки."""
+    width = min(a.right, b.right) - max(a.x, b.x)
+    height = min(a.bottom, b.bottom) - max(a.y, b.y)
+    if width <= 0 or height <= 0:
+        return False
+    smaller = min(a.w * a.h, b.w * b.h)
+    return smaller > 0 and (width * height) / smaller > _OVERLAP_TOLERANCE
 
-    Порядок предпочтений: цвет, которым шаблон пишет текст этой роли в этом
-    layout'е; затем цвет любого его текстового слота; и только если шаблон
-    не сказал ничего — выбор по яркости фона.
 
-    Так правильнее, чем всегда считать по фону: шаблон уже решил, каким цветом
-    здесь писать, и его решение учитывает градиенты, фоновые картинки и декор,
-    о которых мы не знаем ничего. Наивный вариант «чёрный текст по умолчанию»
-    на первом же прогоне дал чёрное по чёрному на тёмном шаблоне.
+def _assign(slots: list, role: SlotRole, taken: list[Box] | None = None) -> object | None:
+    """Свободный слот нужной роли, иначе — ближайший подходящий.
+
+    Точное совпадение роли предпочтительнее, но отказываться от вёрстки из-за
+    того, что в композиции список называется абзацем, не за что: и то и
+    другое — рамка под текст.
+
+    Слот, налезающий на уже занятую рамку, не берётся вовсе. Композиция
+    снимается со слайда-примера, и её слоты перекрываются там, где у дизайнера
+    надпись лежала поверх карточки. Положить туда два разных текста значит
+    выдать кашу: на `zelenie_investicii` так получалось до шести наложений на
+    колоду.
     """
-    for slot in layout.slots:
+    taken = taken or []
+    for wanted in (role, *_TEXT_FALLBACK.get(role, ())):
+        free = [slot for slot in slots if slot.role is wanted]
+        clear = [
+            slot for slot in free if not any(_overlaps(slot.box, box) for box in taken)
+        ]
+        if clear:
+            slots.remove(clear[0])
+            return clear[0]
+    return None
+
+
+# ── Цвет и свободная область ─────────────────────────────────────────────────
+
+
+# Порог контраста из Приложения 1 ТЗ. Тем же числом меряет и аудит, поэтому
+# вёрстка не имеет права выдавать то, что он справедливо забракует.
+MIN_CONTRAST = 4.5
+
+
+def _text_color(
+    container, role: SlotRole, is_dark: bool, background: Color | None
+) -> Color:
+    """Цвет текста для роли — взятый из самого шаблона и проверенный на фоне.
+
+    Порядок предпочтений: цвет, которым шаблон пишет текст этой роли здесь;
+    затем цвет любого его текстового слота; и только если шаблон не сказал
+    ничего — выбор по яркости фона.
+
+    Так правильнее, чем всегда считать по фону: шаблон уже решил, каким
+    цветом здесь писать, и его решение учитывает градиенты, фоновые картинки
+    и декор, о которых мы не знаем ничего.
+
+    Но взятый цвет обязан пройти проверку контрастом. Композиция снимается со
+    слайда-примера, а фон слайду назначает его layout — и это законно разные
+    слайды: на `vk_workspace` композиция со светлого примера приезжала на
+    чёрный фон, и текст получался чёрным по чёрному. Не влезающий в порог
+    цвет заменяется на тот, что читается: обратное — отдать колоду, которую
+    аудит забракует, а человек не прочитает.
+    """
+    chosen: Color | None = None
+    for slot in container.slots:
         if slot.role is role and slot.style is not None:
-            return slot.style.color
-    for slot in layout.slots:
-        if slot.style is not None:
-            return slot.style.color
-    background = layout.background
-    if background is not None and background.luminance < 0.5:
-        return Color(rgb="FFFFFF")
-    return Color(rgb="111111")
+            chosen = slot.style.color
+            break
+    if chosen is None:
+        for slot in container.slots:
+            if slot.style is not None:
+                chosen = slot.style.color
+                break
+
+    readable = Color(rgb="FFFFFF") if is_dark else Color(rgb="111111")
+    if chosen is None or background is None:
+        return chosen or readable
+    if chosen.contrast_ratio(background) >= MIN_CONTRAST:
+        return chosen
+    return readable
 
 
-def _content_area(spec: TemplateSpec, layout: LayoutSpec) -> Box:
+def _content_area(spec: TemplateSpec, container) -> Box:
     """Свободная область: поля шаблона минус то, что занимает заголовок."""
     grid = spec.grid
     left = grid.margin_left_emu if grid else spec.slide_width_emu // 20
@@ -120,47 +371,161 @@ def _content_area(spec: TemplateSpec, layout: LayoutSpec) -> Box:
     top = grid.margin_top_emu if grid else spec.slide_height_emu // 12
     bottom = grid.margin_bottom_emu if grid else spec.slide_height_emu // 12
 
-    title = _title_slot(layout)
-    if title is not None:
-        top = max(top, title.box.bottom + spec.slide_height_emu // 40)
-
     width = spec.slide_width_emu - left - right
+    if width <= 0:
+        raise LayoutError(
+            f"поля шаблона {spec.source_name!r} не оставляют места под содержание"
+        )
+
+    # Обычно содержание идёт под заголовком. Но заголовок композиции бывает и
+    # внизу слайда — тогда места под ним нет, и упираться в это нельзя:
+    # берём всю область внутри полей, а разложить по ней — забота слотов.
+    title = _title_slot(container)
+    under_title = top
+    if title is not None:
+        under_title = max(top, title.box.bottom + spec.slide_height_emu // 40)
+    if spec.slide_height_emu - under_title - bottom > spec.slide_height_emu // 10:
+        top = under_title
+
     height = spec.slide_height_emu - top - bottom
-    if width <= 0 or height <= 0:
+    if height <= 0:
         raise LayoutError(
             f"поля шаблона {spec.source_name!r} не оставляют места под содержание"
         )
     return Box(x=left, y=top, w=width, h=height)
 
 
-def _block_lines(plan_slide: SlidePlan) -> list[str]:
-    """Блоки плана, приведённые к строкам. Скелет верстает всё текстом."""
+def _free_band(
+    spec: TemplateSpec, container, index: int, bands: int, taken: list[Box]
+) -> Box:
+    """Полоса свободной области для блока, которому не досталось слота.
+
+    Блоки без слота нельзя класть в одну и ту же рамку: на `vk_workspace`
+    два таких блока легли друг на друга, и слайд читался как каша из двух
+    текстов. Свободная область делится на равные полосы по числу блоков
+    слайда — верхняя граница, зато без наложений между самими полосами.
+
+    Отсчёт идёт ниже всего, что слайд уже занял. Иначе полоса ложится на
+    слот, взятый предыдущим блоком: на `zelenie_investicii` она садилась
+    ровно на рамку соседа, потому что свободная область считалась от
+    заголовка и про занятые слоты не знала.
+    """
+    area = _content_area(spec, container)
+    floor = max(
+        (box.bottom for box in taken if box.bottom <= area.bottom), default=area.y
+    )
+    top = min(max(area.y, floor), area.bottom - _MIN_BAND_SHARE_DIVISOR)
+    remaining = max(_MIN_BAND_SHARE_DIVISOR, area.bottom - top)
+    share = max(1, bands - index)
+    return Box(x=area.x, y=top, w=area.w, h=max(1, remaining // share))
+
+
+def _block_lines(block) -> list[str]:
+    """Блок плана, приведённый к строкам для текстовой рамки."""
     lines: list[str] = []
-    for block in plan_slide.blocks:
-        if block.heading:
-            lines.append(block.heading)
-        lines.extend(block.items)
-        if block.series_ids and not block.items:
-            lines.append(f"Данные: {', '.join(block.series_ids)}")
+    if block.heading:
+        lines.append(block.heading)
+    lines.extend(block.items)
+    if block.table is not None and not lines:
+        lines.append(" | ".join(block.table.columns))
+        lines.extend(" | ".join(row) for row in block.table.rows)
+    if block.series_ids and not lines:
+        lines.append(", ".join(block.series_ids))
     return lines
+
+
+# ── Сборка слайда ────────────────────────────────────────────────────────────
+
+
+def _overflow_issue(
+    slide_index: int, element_id: str, box: Box, result: FitResult, what: str
+) -> Issue:
+    """Находка о тексте, не влезшем даже на минимальной ступени шкалы.
+
+    Заводится честно и сразу: молча обрезанный текст хуже помеченного, а
+    дальше уменьшать кегль нельзя — промежуточное значение поймает проверка
+    «кегль не из шкалы шаблона».
+    """
+    return Issue(
+        check_id="layout.text_overflow",
+        kind=CheckKind.DETERMINISTIC,
+        category=IssueCategory.LAYOUT,
+        severity=Severity.WARNING,
+        slide_index=slide_index,
+        element_ids=[element_id],
+        bbox=box,
+        message=(
+            f"{what} не помещается в рамку на минимальном кегле шкалы "
+            f"({result.size_pt:g} pt): не хватает "
+            f"{result.overflow_emu / 914400:.2f} дюйма по высоте"
+        ),
+        fix=ProposedFix(
+            kind=FixKind.ASSISTED,
+            description="сократить текст или разнести блоки на два слайда",
+            action="shorten_or_split",
+            params={"slide_index": slide_index, "element_id": element_id},
+        ),
+    )
 
 
 def build_slide_ir(
     spec: TemplateSpec,
     plan_slide: SlidePlan,
-    layout: LayoutSpec,
+    strategy: Strategy,
+    metrics: FontMetrics | None,
+    ladders: dict[SlotRole, list[float]],
     font_family: str,
-) -> SlideIR:
-    background = layout.background
-    provenance = Provenance(kind=SourceKind.LAYOUT, ref=layout.id)
+    used: set[str] | None = None,
+) -> tuple[SlideIR, list[Issue]]:
+    """Один слайд: композиция шаблона, заполненная содержанием плана."""
+    pattern = pick_pattern(
+        spec, plan_slide, strategy, used, metrics, ladders[SlotRole.TITLE]
+    )
+    layout = pick_layout(spec, plan_slide)
+    container = pattern if pattern is not None else layout
 
+    if pattern is not None:
+        is_dark = pattern.is_dark
+        background = next(
+            (lay.background for lay in spec.layouts if lay.id == pattern.layout_id),
+            layout.background,
+        )
+        provenance = Provenance(kind=SourceKind.SLIDE, ref=pattern.id)
+    else:
+        is_dark = layout.is_dark
+        background = layout.background
+        provenance = Provenance(kind=SourceKind.LAYOUT, ref=layout.id)
+
+    issues: list[Issue] = []
     elements: list[Element] = []
 
-    title_slot = _title_slot(layout)
-    title_box = title_slot.box if title_slot else _content_area(spec, layout)
+    # ── Заголовок ────────────────────────────────────────────────────────
+    title_slot = _title_slot(container)
+    title_box = title_slot.box if title_slot else _content_area(spec, container)
+    title_ladder = ladders[SlotRole.TITLE]
+    title_declared = (
+        title_slot.style.size_pt
+        if title_slot is not None and title_slot.style is not None
+        else (title_ladder[-1] if title_ladder else 18.0)
+    )
+    title_start = strategy.start_size(title_ladder, title_declared)
+    title_id = f"s{plan_slide.index}_title"
+
+    if metrics is not None:
+        fit = fit_size(
+            plan_slide.takeaway_title, metrics, title_box, title_ladder, title_start
+        )
+        title_size = fit.size_pt
+        if not fit.fits:
+            issues.append(
+                _overflow_issue(plan_slide.index, title_id, title_box, fit, "заголовок")
+            )
+    else:
+        title_size = title_start
+
     elements.append(
         Element(
-            id=f"s{plan_slide.index}_title",
+            id=title_id,
             kind=ElementKind.TEXT,
             role=SlotRole.TITLE,
             box=title_box,
@@ -171,9 +536,9 @@ def build_slide_ir(
                         text=plan_slide.takeaway_title,
                         style=TextStyle(
                             font_family=font_family,
-                            size_pt=_scale(spec, _TITLE_SCALE_INDEX),
+                            size_pt=title_size,
                             bold=True,
-                            color=_text_color(layout, SlotRole.TITLE),
+                            color=_text_color(container, SlotRole.TITLE, is_dark, background),
                         ),
                     )
                 ]
@@ -181,50 +546,224 @@ def build_slide_ir(
         )
     )
 
-    lines = _block_lines(plan_slide)
-    if lines:
-        slots = _content_slots(layout)
-        box = slots[0].box if slots else _content_area(spec, layout)
-        body_style = TextStyle(
-            font_family=font_family,
-            size_pt=_scale(spec, _BODY_SCALE_INDEX),
-            color=_text_color(layout, SlotRole.BODY),
+    # ── Содержание ───────────────────────────────────────────────────────
+    free_slots = (
+        _usable_slots(pattern, spec.slide_width_emu, spec.slide_height_emu)
+        if pattern is not None
+        else [
+            slot
+            for slot in layout.slots
+            if slot.role in _CONTENT_ROLES
+            and _on_slide(slot.box, spec.slide_width_emu, spec.slide_height_emu)
+        ]
+    )
+    # Вариант решает, какую долю мест композиции занимать: плотный забивает
+    # все, воздушный оставляет воздух.
+    allowed = max(1, round(len(free_slots) * strategy.slot_fill_target)) if free_slots else 0
+    free_slots = free_slots[:allowed]
+
+    # Сколько блоков уже не нашли себе слота: каждому следующему достаётся
+    # своя полоса свободной области, иначе они лягут друг на друга.
+    homeless = 0
+    bands = max(1, len(plan_slide.blocks))
+    # Рамки, которые слайд уже занял. Заголовок занимает свою первым.
+    taken = [title_box]
+
+    for position, block in enumerate(plan_slide.blocks):
+        lines = _block_lines(block)
+        if not lines:
+            continue
+        role = strategy.role_for(block)
+        slot = _assign(free_slots, role, taken)
+        box = (
+            slot.box
+            if slot is not None
+            else _free_band(spec, container, homeless, bands, taken)
         )
+        if slot is None:
+            homeless += 1
+        block_ladder = ladders[slot.role if slot is not None else role]
+        declared = (
+            slot.style.size_pt
+            if slot is not None and slot.style is not None
+            else (block_ladder[len(block_ladder) // 2] if block_ladder else 18.0)
+        )
+        start = strategy.start_size(block_ladder, declared)
+        element_id = f"s{plan_slide.index}_b{position}"
+
+        if metrics is not None:
+            fit = fit_paragraphs(lines, metrics, box, block_ladder, start)
+            size = fit.size_pt
+            if not fit.fits:
+                issues.append(
+                    _overflow_issue(
+                        plan_slide.index, element_id, box, fit, f"блок {block.id!r}"
+                    )
+                )
+        else:
+            size = start
+
+        style = TextStyle(
+            font_family=font_family,
+            size_pt=size,
+            color=_text_color(container, role, is_dark, background),
+        )
+        taken.append(box)
         elements.append(
             Element(
-                id=f"s{plan_slide.index}_body",
+                id=element_id,
                 kind=ElementKind.TEXT,
-                role=SlotRole.BODY,
+                role=slot.role if slot is not None else role,
                 box=box,
                 provenance=provenance,
                 text=TextContent(
                     paragraphs=[
-                        Paragraph(text=line, style=body_style, bullet=True) for line in lines
+                        Paragraph(text=line, style=style, bullet=len(lines) > 1)
+                        for line in lines
                     ]
                 ),
             )
         )
 
-    return SlideIR(
+    slide = SlideIR(
         index=plan_slide.index,
-        layout_id=layout.id,
+        layout_id=pattern.layout_id if pattern is not None else layout.id,
+        pattern_id=pattern.id if pattern is not None else None,
+        donor_slide_index=pattern.donor_slide_index if pattern is not None else None,
         elements=elements,
         background=background,
-        is_dark=layout.is_dark,
+        is_dark=is_dark,
         speaker_notes=plan_slide.speaker_notes,
     )
+    return slide, issues
 
 
-def build_deck_ir(spec: TemplateSpec, plan, variant: str) -> DeckIR:
+def build_deck_ir(
+    spec: TemplateSpec, plan, variant, strategy: Strategy | None = None
+) -> tuple[DeckIR, list[Issue]]:
+    """Колода одного варианта и находки, которые вёрстка завела о себе сама.
+
+    `variant` принимается и строкой, и пресетом из конфига: строка означает
+    стратегию по умолчанию, и тогда вёрстка ведёт себя как «сбалансированная».
+    """
+    if strategy is None:
+        strategy = (
+            Strategy.from_config(variant)
+            if hasattr(variant, "strategy")
+            else Strategy(
+                name=str(variant),
+                slot_fill_target=0.7,
+                type_scale_bias="mid",
+                data_viz_mode="auto",
+                blocks_per_slide=2,
+                pattern_preference=(),
+            )
+        )
+    variant_name = getattr(variant, "name", str(variant))
+
     font_family = spec.fonts[0].family if spec.fonts else "Arial"
-    slides = [
-        build_slide_ir(spec, plan_slide, pick_layout(spec, plan_slide), font_family)
-        for plan_slide in plan.slides
-    ]
-    return DeckIR(
-        variant=variant,
-        template_sha256=spec.template_sha256,
-        slide_width_emu=spec.slide_width_emu,
-        slide_height_emu=spec.slide_height_emu,
-        slides=slides,
+    metrics = metrics_for_spec(spec).metrics
+    # Лестница у каждой роли своя: предел «мельче нельзя» шаблон задаёт для
+    # заголовка и для тела текста по-разному.
+    ladders = {role: ladder_for_role(spec, role) for role in SlotRole}
+
+    slides: list[SlideIR] = []
+    issues: list[Issue] = []
+    used: set[str] = set()
+    for plan_slide in plan.slides:
+        built, found = _slides_for(
+            spec, plan_slide, strategy, metrics, ladders, font_family, used
+        )
+        slides.extend(built)
+        issues.extend(found)
+        used.update(s.pattern_id for s in built if s.pattern_id)
+
+    # Индексы обязаны идти подряд: разбиение слайда сдвигает всё, что ниже.
+    for position, slide in enumerate(slides, start=1):
+        slide.index = position
+
+    return (
+        DeckIR(
+            variant=variant_name,
+            template_sha256=spec.template_sha256,
+            slide_width_emu=spec.slide_width_emu,
+            slide_height_emu=spec.slide_height_emu,
+            slides=slides,
+        ),
+        issues,
     )
+
+
+def _slides_for(
+    spec: TemplateSpec,
+    plan_slide: SlidePlan,
+    strategy: Strategy,
+    metrics: FontMetrics | None,
+    ladders: dict[SlotRole, list[float]],
+    font_family: str,
+    used: set[str],
+) -> tuple[list[SlideIR], list[Issue]]:
+    """Слайд, а если он переполнен и деление помогает — два.
+
+    Деление — третий шаг закона фиттера, и применяется **после** того, как
+    шкала кончилась: пока кегль ещё можно опустить на ступень, слайд делить
+    не за что.
+
+    Второе средство того же шага — сокращение текста — требует ещё одного
+    обращения к модели, а сокращает текст планировщик, который отработал
+    раньше вёрстки. Пока сокращателя нет, `SHORTEN` пользуется тем средством,
+    которое есть. Молча не делать ничего нельзя: без деления блоки, которым
+    не хватило места, ложатся друг на друга — на `theme_only` так выходило
+    шесть наложений на колоду.
+    """
+    slide, issues = build_slide_ir(
+        spec, plan_slide, strategy, metrics, ladders, font_family, used
+    )
+
+    # Переполнение заголовка делением не лечится: у обеих половин заголовок
+    # тот же. Делить имеет смысл только из-за содержания.
+    title_id = f"s{plan_slide.index}_title"
+    content_overflow = [
+        issue
+        for issue in issues
+        if issue.check_id == "layout.text_overflow" and title_id not in issue.element_ids
+    ]
+    if not content_overflow:
+        return [slide], issues
+
+    parts = split_blocks(list(plan_slide.blocks))
+    if len(parts) < 2:
+        # Делить нечего: блок один. Находка остаётся — это четвёртый шаг
+        # закона, и он честнее молчаливой обрезки.
+        return [slide], issues
+
+    halves: list[SlideIR] = []
+    remaining: list[Issue] = []
+    for part_no, chunk in enumerate(parts):
+        piece = plan_slide.model_copy(
+            update={"index": plan_slide.index + part_no, "blocks": chunk}
+        )
+        built, found = build_slide_ir(
+            spec,
+            piece,
+            strategy,
+            metrics,
+            ladders,
+            font_family,
+            used | {slide.pattern_id or ""},
+        )
+        # Идентификаторы элементов обязаны остаться уникальными в колоде.
+        for element in built.all_elements():
+            element.id = f"{element.id}_p{part_no}"
+        for issue in found:
+            issue.element_ids = [f"{i}_p{part_no}" for i in issue.element_ids]
+        halves.append(built)
+        remaining.extend(found)
+
+    # Деление обязано себя окупить. Лишний слайд, который не убрал ни одного
+    # переполнения, — чистый проигрыш: колода длиннее, а текст всё так же не
+    # влезает. На синтетическом шаблоне безусловное деление растило колоду с
+    # десяти слайдов до пятнадцати и число находок с шести до одиннадцати.
+    if len(remaining) >= len(issues):
+        return [slide], issues
+    return halves, remaining
