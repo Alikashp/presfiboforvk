@@ -1,31 +1,33 @@
-"""Минимальный разбор шаблона. Скелетная версия слоя parse.
+"""Разбор шаблона в `TemplateSpec`. Вход слоя parse, один на весь пайплайн.
 
-Берёт то, что лежит на поверхности и не требует статистики: размер слайда,
-палитру и гарнитуры темы, layout'ы с плейсхолдерами. Этого хватает, чтобы
-сквозной прогон дошёл до `.pptx`, и недостаточно, чтобы результат выглядел как
-шаблон.
+Модуль только собирает результат из частей и кэширует его. Вся добыча знаний
+живёт в соседях: `tokens` — палитра, гарнитуры, шкала и поля;
+`patterns` — композиции со слайдов-примеров; `recurring` — логотип и
+колонтитул; `fonts` — встроенные шрифты; `semantics` — класс композиции.
 
-Фаза 3 заменит здесь почти всё: палитру и гарнитуры — статистикой
-употребления, а не чтением темы (у одного из трёх шаблонов датасета в
-`clrScheme` стоковая офисная палитра); layout'ы — библиотекой паттернов,
-снятых со слайдов-примеров. Провенанс `THEME` на токенах не украшение: по нему
-фаза 3 отличит то, что она уточнила, от того, что осталось с этого прохода.
+Кэш по хэшу файла нужен бюджету времени: разбор колоды на полсотни слайдов с
+двумя сотнями картинок занимает секунды, а три варианта вёрстки разбирают один
+и тот же шаблон трижды.
 """
 
 from __future__ import annotations
 
 import hashlib
+import json
 from pathlib import Path
 
 from lxml import etree
 from pptx import Presentation
 from pptx.presentation import Presentation as PresentationObject
 
+from deckwright.parse import tokens as tokens_mod
+from deckwright.parse.fonts import extract_embedded_fonts
+from deckwright.parse.patterns import mine_slide
+from deckwright.parse.recurring import find_recurring
+from deckwright.parse.semantics import classified
 from deckwright.schemas import (
     Box,
     Color,
-    ColorToken,
-    FontToken,
     LayoutSpec,
     Provenance,
     Slot,
@@ -38,9 +40,7 @@ from deckwright.schemas import (
 A_NS = "http://schemas.openxmlformats.org/drawingml/2006/main"
 P_NS = "http://schemas.openxmlformats.org/presentationml/2006/main"
 
-# Тип плейсхолдера OOXML → роль слота. Заголовок и подзаголовок опознаются
-# однозначно; всё остальное на этом проходе считается телом, а настоящее
-# разделение ролей приходит в фазе 3 вместе с паттернами.
+# Тип плейсхолдера OOXML → роль слота.
 _PH_ROLE: dict[str, SlotRole] = {
     "title": SlotRole.TITLE,
     "ctrTitle": SlotRole.TITLE,
@@ -55,176 +55,68 @@ _PH_ROLE: dict[str, SlotRole] = {
     "dt": SlotRole.FOOTER,
 }
 
-_DEFAULT_SCALE_PT = (9.0, 12.0, 14.0, 18.0, 24.0, 32.0, 44.0)
+# Кегль по умолчанию, когда шаблон не сказал ничего: нужен только чтобы
+# собрать валидный стиль, реальные значения приходят из шкалы.
+FALLBACK_SIZE_PT = 18.0
 
 
 def file_sha256(path: str | Path) -> str:
-    """Хэш файла шаблона: ключ кэша и поле манифеста."""
     digest = hashlib.sha256()
-    with Path(path).open("rb") as fh:
-        for chunk in iter(lambda: fh.read(1 << 20), b""):
+    with Path(path).open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
             digest.update(chunk)
     return digest.hexdigest()
 
 
 def _theme_root(prs: PresentationObject) -> etree._Element | None:
-    master = prs.slide_masters[0] if len(prs.slide_masters) else None
-    if master is None:
+    if not len(prs.slide_masters):
         return None
-    for rel in master.part.rels.values():
+    for rel in prs.slide_masters[0].part.rels.values():
         if rel.reltype.endswith("/theme"):
             return etree.fromstring(rel.target_part.blob)
     return None
 
 
-def _theme_palette(theme: etree._Element | None) -> list[ColorToken]:
-    if theme is None:
-        return []
-    scheme = theme.find(f".//{{{A_NS}}}clrScheme")
-    if scheme is None:
-        return []
-    tokens: list[ColorToken] = []
-    for entry in scheme:
-        slot_name = etree.QName(entry).localname
-        srgb = entry.find(f"{{{A_NS}}}srgbClr")
-        sys_clr = entry.find(f"{{{A_NS}}}sysClr")
-        value = (
-            srgb.get("val")
-            if srgb is not None
-            else (sys_clr.get("lastClr") if sys_clr is not None else None)
-        )
-        if not value:
-            continue
-        tokens.append(
-            ColorToken(
-                color=Color(rgb=value, scheme=slot_name),
-                usage_count=0,
-                provenance=Provenance(
-                    kind=SourceKind.THEME,
-                    ref=f"clrScheme/{slot_name}",
-                    note="объявление темы; фаза 3 уточнит статистикой употребления",
-                ),
-            )
-        )
-    return tokens
-
-
-def _theme_fonts(theme: etree._Element | None) -> list[FontToken]:
+def _theme_families(theme: etree._Element | None) -> list[str]:
     if theme is None:
         return []
     families: list[str] = []
     for role in ("majorFont", "minorFont"):
         latin = theme.find(f".//{{{A_NS}}}{role}/{{{A_NS}}}latin")
-        if latin is not None and latin.get("typeface"):
-            families.append(latin.get("typeface"))
-    seen: list[str] = []
-    for family in families:
-        if family not in seen:
-            seen.append(family)
-    return [FontToken(family=family, usage_count=0) for family in seen]
+        typeface = latin.get("typeface") if latin is not None else None
+        if typeface and typeface not in families:
+            families.append(typeface)
+    return families
 
 
-def _theme_colors(theme: etree._Element | None) -> dict[str, str]:
-    """{имя слота темы: RRGGBB}. Словарь для резолва `schemeClr`."""
-    if theme is None:
-        return {}
-    scheme = theme.find(f".//{{{A_NS}}}clrScheme")
-    if scheme is None:
-        return {}
-    resolved: dict[str, str] = {}
-    for entry in scheme:
-        srgb = entry.find(f"{{{A_NS}}}srgbClr")
-        sys_clr = entry.find(f"{{{A_NS}}}sysClr")
-        value = (
-            srgb.get("val")
-            if srgb is not None
-            else (sys_clr.get("lastClr") if sys_clr is not None else None)
-        )
-        if value:
-            resolved[etree.QName(entry).localname] = value
-    return resolved
-
-
-def _color_map(master) -> dict[str, str]:
-    """`p:clrMap` мастера: `bg1`/`tx1` → слот темы.
-
-    Фигуры ссылаются на цвета через `bg1`, `tx1`, `bg2`, `tx2`, а те через
-    карту мастера указывают на `lt1`, `dk1` и так далее. Без этого шага
-    `schemeClr val="bg1"` не резолвится ни во что.
-    """
-    clr_map = master._element.find(f"{{{P_NS}}}clrMap")
-    if clr_map is None:
-        return {}
-    return dict(clr_map.attrib)
-
-
-def _resolve_fill(
-    element: etree._Element | None,
-    theme: dict[str, str],
-    clr_map: dict[str, str],
-) -> Color | None:
-    """Первый сплошной цвет внутри элемента, приведённый к RGB."""
-    if element is None:
-        return None
-    fill = element.find(f".//{{{A_NS}}}solidFill")
-    if fill is None:
-        return None
-    srgb = fill.find(f"{{{A_NS}}}srgbClr")
-    if srgb is not None and srgb.get("val"):
-        return Color(rgb=srgb.get("val"))
-    scheme = fill.find(f"{{{A_NS}}}schemeClr")
-    if scheme is not None and scheme.get("val"):
-        name = scheme.get("val")
-        slot = clr_map.get(name, name)
-        value = theme.get(slot)
-        if value:
-            return Color(rgb=value, scheme=slot)
-    return None
-
-
-def _layout_background(
-    layout, theme: dict[str, str], clr_map: dict[str, str]
-) -> Color | None:
-    """Цвет фона layout'а, если он задан сплошной заливкой.
-
-    Фон-картинка или градиент цвета не дают — тогда None, и вёрстка возьмёт
-    цвет текста из самого шаблона, а не из яркости фона.
-    """
-    return _resolve_fill(layout._element.find(f".//{{{P_NS}}}bg"), theme, clr_map)
-
-
-def _placeholder_text_color(
-    element: etree._Element, theme: dict[str, str], clr_map: dict[str, str]
-) -> Color | None:
-    """Цвет, которым сам шаблон пишет текст в этом плейсхолдере.
-
-    Это надёжнее, чем выводить цвет из яркости фона: шаблон уже решил, каким
-    цветом здесь писать, и решение учитывает градиенты, картинки и декор,
-    про которые мы ничего не знаем. На `vk_workspace` и `vk_tech` это `lt1`,
-    на `vk_education` — `dk1`.
-    """
-    for node in element.iter():
-        if node.tag in (f"{{{A_NS}}}defRPr", f"{{{A_NS}}}rPr", f"{{{A_NS}}}endParaRPr"):
-            color = _resolve_fill(node, theme, clr_map)
-            if color is not None:
-                return color
-    return None
+def _shape_tree(element: etree._Element) -> etree._Element | None:
+    return element.find(f".//{{{P_NS}}}spTree")
 
 
 def _placeholder_role(element: etree._Element) -> SlotRole:
-    ph = element.xpath(".//*[local-name()='ph']")
+    ph = element.findall(f".//{{{P_NS}}}ph")
     if not ph:
         return SlotRole.UNKNOWN
     return _PH_ROLE.get(ph[0].get("type", "body"), SlotRole.BODY)
 
 
-def _layout_slots(
-    layout,
-    default_font: str,
-    theme: dict[str, str],
-    clr_map: dict[str, str],
-    fallback_text: Color,
-) -> list[Slot]:
+def _text_color(
+    element: etree._Element, theme: dict[str, str], clr_map: dict[str, str]
+) -> Color | None:
+    """Цвет, которым сам шаблон пишет текст в этом плейсхолдере.
+
+    Надёжнее вывода по яркости фона: шаблон уже принял решение с учётом
+    градиентов и фоновых картинок, о которых парсер ничего не знает.
+    """
+    for node in element.iter():
+        if etree.QName(node).localname in ("defRPr", "rPr", "endParaRPr"):
+            color = tokens_mod.resolve_color(node, theme, clr_map)
+            if color is not None:
+                return color
+    return None
+
+
+def _layout_slots(layout, style: TextStyle, theme, clr_map, fallback: Color) -> list[Slot]:
     slots: list[Slot] = []
     for shape in layout.placeholders:
         if None in (shape.left, shape.top, shape.width, shape.height):
@@ -232,17 +124,13 @@ def _layout_slots(
         if shape.width <= 0 or shape.height <= 0:
             continue
         fmt = shape.placeholder_format
+        color = _text_color(shape._element, theme, clr_map) or fallback
         slots.append(
             Slot(
                 id=f"ph{fmt.idx}",
                 role=_placeholder_role(shape._element),
                 box=Box(x=shape.left, y=shape.top, w=shape.width, h=shape.height),
-                style=TextStyle(
-                    font_family=default_font,
-                    size_pt=18.0,
-                    color=_placeholder_text_color(shape._element, theme, clr_map)
-                    or fallback_text,
-                ),
+                style=style.model_copy(update={"color": color}),
                 placeholder_text=shape.text_frame.text if shape.has_text_frame else "",
                 ph_idx=fmt.idx,
                 provenance=Provenance(kind=SourceKind.LAYOUT, ref=layout.name),
@@ -251,71 +139,189 @@ def _layout_slots(
     return slots
 
 
-def parse_template(path: str | Path) -> TemplateSpec:
-    """Открывает `.pptx` и снимает с него то, что доступно без статистики."""
-    path = Path(path)
+def _parse(path: Path, font_dir: Path | None) -> TemplateSpec:
     prs = Presentation(str(path))
-    theme = _theme_root(prs)
+    slide_w, slide_h = prs.slide_width, prs.slide_height
+    theme_root = _theme_root(prs)
+    theme = tokens_mod.theme_colors(theme_root)
+    warnings: list[str] = []
 
-    fonts = _theme_fonts(theme)
-    default_font = fonts[0].family if fonts else "Arial"
+    # ── Статистика по слайдам, layout'ам и мастерам ──────────────────────────
+    usage = tokens_mod.Usage()
+    for master in prs.slide_masters:
+        clr_map = tokens_mod.color_map(master._element)
+        trees = [_shape_tree(master._element)]
+        trees += [_shape_tree(layout._element) for layout in master.slide_layouts]
+        tokens_mod.collect(
+            [t for t in trees if t is not None],
+            theme,
+            clr_map,
+            slide_w,
+            slide_h,
+            usage,
+            on_slide=False,
+        )
+    primary_map = (
+        tokens_mod.color_map(prs.slide_masters[0]._element) if len(prs.slide_masters) else {}
+    )
+    tokens_mod.collect(
+        [slide.shapes._spTree for slide in prs.slides],
+        theme,
+        primary_map,
+        slide_w,
+        slide_h,
+        usage,
+    )
 
-    theme_colors = _theme_colors(theme)
+    palette = tokens_mod.build_palette(usage, theme)
+    fonts = tokens_mod.build_fonts(usage, _theme_families(theme_root))
+    type_scale = tokens_mod.build_type_scale(usage)
+    grid = tokens_mod.build_grid(usage)
 
+    # ── Встроенные шрифты ────────────────────────────────────────────────────
+    if font_dir is not None:
+        extracted, font_warnings = extract_embedded_fonts(path, font_dir / path.stem)
+        warnings.extend(font_warnings)
+        by_family = {font.family for font in extracted}
+        fonts = [
+            token.model_copy(
+                update={
+                    "embedded": True,
+                    "file_path": str(
+                        next(f.path for f in extracted if f.family == token.family)
+                    ),
+                }
+            )
+            if token.family in by_family
+            else token
+            for token in fonts
+        ]
+        missing = [t.family for t in fonts if not t.embedded and t.usage_count > 0]
+        if missing:
+            warnings.append(
+                "шрифты не встроены в шаблон и будут подставлены системой, "
+                f"метрики могут разойтись: {', '.join(missing[:5])}"
+            )
+
+    base_family = fonts[0].family if fonts else "Arial"
+    base_size = type_scale[len(type_scale) // 2] if type_scale else FALLBACK_SIZE_PT
+    base_color = Color(rgb=palette[0].color.rgb) if palette else Color(rgb="000000")
+    base_style = TextStyle(font_family=base_family, size_pt=base_size, color=base_color)
+
+    # ── Layout'ы ─────────────────────────────────────────────────────────────
     layouts: list[LayoutSpec] = []
     masters: list[str] = []
+    layout_ids: dict[int, str] = {}
     for m_index, master in enumerate(prs.slide_masters):
         master_id = f"master{m_index + 1}"
         masters.append(master_id)
-        clr_map = _color_map(master)
-        master_bg = _resolve_fill(
-            master._element.find(f".//{{{P_NS}}}bg"), theme_colors, clr_map
-        )
+        clr_map = tokens_mod.color_map(master._element)
+        master_bg = tokens_mod.resolve_color(
+            master._element.find(f".//{{{P_NS}}}bg"), theme, clr_map
+        ) if master._element.find(f".//{{{P_NS}}}bg") is not None else None
+
         for l_index, layout in enumerate(master.slide_layouts):
-            background = _layout_background(layout, theme_colors, clr_map) or master_bg
-            # Цвет текста для слотов, у которых шаблон его не задал: по яркости
-            # фона, если фон известен, иначе тёмный.
-            fallback_text = (
-                Color(rgb="FFFFFF")
-                if background is not None and background.luminance < 0.5
-                else Color(rgb="111111")
-            )
+            bg_node = layout._element.find(f".//{{{P_NS}}}bg")
+            background = (
+                tokens_mod.resolve_color(bg_node, theme, clr_map)
+                if bg_node is not None
+                else None
+            ) or master_bg
+            dark = background is not None and background.luminance < 0.5
+            fallback = Color(rgb="FFFFFF") if dark else Color(rgb="111111")
+            layout_id = f"{master_id}/layout{l_index + 1}"
+            layout_ids[id(layout._element)] = layout_id
             layouts.append(
                 LayoutSpec(
-                    id=f"{master_id}/layout{l_index + 1}",
+                    id=layout_id,
                     name=layout.name,
                     master_id=master_id,
-                    slots=_layout_slots(
-                        layout, default_font, theme_colors, clr_map, fallback_text
-                    ),
+                    slots=_layout_slots(layout, base_style, theme, clr_map, fallback),
                     background=background,
-                    is_dark=background is not None and background.luminance < 0.5,
+                    is_dark=dark,
                 )
             )
 
-    warnings: list[str] = []
     if not any(
         slot.role not in (SlotRole.TITLE, SlotRole.FOOTER, SlotRole.SLIDE_NUMBER)
         for layout in layouts
         for slot in layout.slots
     ):
-        # Не поломка, а известное свойство датасета: у большинства layout'ов
-        # нет ни одного контентного плейсхолдера. Вёрстка на них опереться
-        # не сможет, композиции придётся брать со слайдов-примеров (фаза 3).
         warnings.append(
             "ни в одном layout'е нет контентных плейсхолдеров: "
-            "композиции нужно добывать из слайдов-примеров"
+            "вёрстка опирается на паттерны со слайдов-примеров"
         )
+
+    # ── Паттерны со слайдов-примеров ─────────────────────────────────────────
+    patterns = []
+    for index, slide in enumerate(prs.slides, start=1):
+        pattern = mine_slide(
+            slide.shapes._spTree,
+            index,
+            slide_w,
+            slide_h,
+            layout_ids.get(id(slide.slide_layout._element)),
+            base_style,
+        )
+        if pattern is not None:
+            patterns.append(classified(pattern, slide_w, slide_h))
+
+    slide_count = len(prs.slides._sldIdLst)
+    if slide_count and len(patterns) / slide_count < 0.5:
+        warnings.append(
+            f"композиции сняты лишь с {len(patterns)} слайдов из {slide_count}: "
+            "шаблон беден примерами, вёрстка будет опираться на поля и сетку"
+        )
+
+    # ── Повторяющиеся элементы ───────────────────────────────────────────────
+    per_slide: list[list[etree._Element]] = []
+    for slide in prs.slides:
+        trees = [slide.shapes._spTree]
+        for source in (slide.slide_layout, slide.slide_layout.slide_master):
+            tree = _shape_tree(source._element)
+            if tree is not None:
+                trees.append(tree)
+        per_slide.append(trees)
+    recurring = find_recurring(per_slide, slide_w, slide_h)
 
     return TemplateSpec(
         template_sha256=file_sha256(path),
         source_name=path.name,
-        slide_width_emu=prs.slide_width,
-        slide_height_emu=prs.slide_height,
-        palette=_theme_palette(theme),
+        slide_width_emu=slide_w,
+        slide_height_emu=slide_h,
+        palette=palette,
         fonts=fonts,
-        type_scale_pt=list(_DEFAULT_SCALE_PT),
+        type_scale_pt=type_scale,
+        grid=grid,
         masters=masters,
         layouts=layouts,
+        patterns=patterns,
+        recurring=recurring,
         warnings=warnings,
     )
+
+
+def parse_template(
+    path: str | Path,
+    cache_dir: str | Path | None = None,
+    font_dir: str | Path | None = None,
+) -> TemplateSpec:
+    """Разбирает `.pptx`. Повторный разбор того же файла берётся из кэша."""
+    path = Path(path)
+    cache_path: Path | None = None
+
+    if cache_dir is not None:
+        cache_path = Path(cache_dir) / f"{file_sha256(path)}.json"
+        if cache_path.exists():
+            try:
+                return TemplateSpec.model_validate_json(cache_path.read_text("utf-8"))
+            except (ValueError, json.JSONDecodeError):
+                # Кэш от прежней версии схемы: разбираем заново и перезаписываем.
+                cache_path.unlink(missing_ok=True)
+
+    spec = _parse(path, Path(font_dir) if font_dir else None)
+
+    if cache_path is not None:
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        cache_path.write_text(spec.model_dump_json(), encoding="utf-8")
+    return spec

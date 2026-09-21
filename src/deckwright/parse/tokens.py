@@ -1,0 +1,371 @@
+"""Токены дизайн-системы, добытые статистикой употребления.
+
+Тема шаблона не обязана описывать его дизайн-систему. У `vk_workspace` в
+`clrScheme` лежит стоковая офисная палитра (4472C4, ED7D31, A5A5A5), не имеющая
+отношения к оформлению колоды: реальный брендовый цвет `0077FF` встречается на
+слайдах 153 раза и в теме не упомянут вовсе. У всех трёх шаблонов датасета
+`fontScheme` объявляет `Arial`, при том что фактически везде набрано шрифтом
+`Play`.
+
+Поэтому палитра и гарнитуры считаются по фактическому употреблению, а тема
+служит двум другим целям: словарём для резолва `schemeClr` в RGB и слабым
+приором, когда статистики не хватает.
+
+Вес цвета — не число упоминаний, а закрашенная площадь: заливка подложки во
+весь слайд важнее для впечатления, чем десять мелких обводок. Цвет текста
+считается отдельно: его площадь мала, а значение велико.
+"""
+
+from __future__ import annotations
+
+from collections import Counter, defaultdict
+from dataclasses import dataclass, field
+
+from lxml import etree
+
+from deckwright.parse.geometry import iter_shapes
+from deckwright.schemas import Box, Color, ColorToken, FontToken, Grid, Provenance, SourceKind
+
+A_NS = "http://schemas.openxmlformats.org/drawingml/2006/main"
+P_NS = "http://schemas.openxmlformats.org/presentationml/2006/main"
+
+# Роль, в которой встретился цвет. Разделение нужно вёрстке: цвет заливки и
+# цвет текста не взаимозаменяемы, даже если совпали по значению.
+ROLE_FILL = "fill"
+ROLE_TEXT = "text"
+ROLE_LINE = "line"
+
+# Кегли ближе этого числа пунктов считаются одной ступенью шкалы: редакторы
+# дают дробные значения после масштабирования (8.12, 14.06), и каждое такое
+# значение отдельной ступенью превращает шкалу в мусор.
+SCALE_TOLERANCE_PT = 0.75
+
+# Ступень, встретившаяся реже этой доли, в шкалу не попадает: случайно
+# изменённый кегль одного блока не является правилом шаблона.
+SCALE_MIN_SHARE = 0.01
+
+# Рёбра ближе этого расстояния считаются одной направляющей (0.02 дюйма).
+EDGE_TOLERANCE_EMU = 18_288
+
+# Направляющая, у которой меньше стольких фигур, не является сеткой.
+MIN_EDGE_SUPPORT = 3
+
+# Фигура, вплотную прижатая к краю слайда, — декор, а не контент: полосы,
+# подложки, фоновые паттерны. Их рёбра к полям отношения не имеют.
+EDGE_HUG_EMU = 9_144
+
+
+@dataclass
+class Usage:
+    """Накопленная статистика по шаблону."""
+
+    colors: dict[tuple[str, str], int] = field(default_factory=lambda: defaultdict(int))
+    color_counts: dict[tuple[str, str], int] = field(default_factory=lambda: defaultdict(int))
+    # Гарнитуры со слайдов и гарнитуры, объявленные в мастерах и layout'ах,
+    # считаются раздельно. Мастер объявляет умолчание, которым может не быть
+    # набрано ни строчки: у `vk_tech` `Calibri` объявлен щедро, а видно на
+    # слайдах `Play`. Смешивать их — значит выбрать гарнитурой шаблона ту,
+    # которой в нём не написано ничего.
+    fonts: Counter[str] = field(default_factory=Counter)
+    fonts_declared: Counter[str] = field(default_factory=Counter)
+    sizes: Counter[float] = field(default_factory=Counter)
+    left_edges: list[int] = field(default_factory=list)
+    right_edges: list[int] = field(default_factory=list)
+    top_edges: list[int] = field(default_factory=list)
+    bottom_edges: list[int] = field(default_factory=list)
+
+
+def theme_colors(theme: etree._Element | None) -> dict[str, str]:
+    """{слот темы: RRGGBB}. Словарь для резолва `schemeClr`."""
+    if theme is None:
+        return {}
+    scheme = theme.find(f".//{{{A_NS}}}clrScheme")
+    if scheme is None:
+        return {}
+    resolved: dict[str, str] = {}
+    for entry in scheme:
+        srgb = entry.find(f"{{{A_NS}}}srgbClr")
+        sys_clr = entry.find(f"{{{A_NS}}}sysClr")
+        value = (
+            srgb.get("val")
+            if srgb is not None
+            else (sys_clr.get("lastClr") if sys_clr is not None else None)
+        )
+        if value:
+            resolved[etree.QName(entry).localname] = value.upper()
+    return resolved
+
+
+def color_map(master_element: etree._Element) -> dict[str, str]:
+    """`p:clrMap` мастера: `bg1`/`tx1` → слот темы.
+
+    Фигуры ссылаются на цвета через `bg1`, `tx1`, `bg2`, `tx2`, а те через
+    карту мастера указывают на `lt1`, `dk1`. Без этого шага `schemeClr
+    val="bg1"` не резолвится ни во что.
+    """
+    clr_map = master_element.find(f"{{{P_NS}}}clrMap")
+    return dict(clr_map.attrib) if clr_map is not None else {}
+
+
+def resolve_color(
+    node: etree._Element, theme: dict[str, str], clr_map: dict[str, str]
+) -> Color | None:
+    """Первый цвет внутри узла, приведённый к RGB."""
+    srgb = node.find(f".//{{{A_NS}}}srgbClr")
+    if srgb is not None and srgb.get("val"):
+        return Color(rgb=srgb.get("val"))
+    scheme = node.find(f".//{{{A_NS}}}schemeClr")
+    if scheme is not None and scheme.get("val"):
+        name = scheme.get("val")
+        slot = clr_map.get(name, name)
+        value = theme.get(slot)
+        if value:
+            return Color(rgb=value, scheme=slot)
+    return None
+
+
+def _collect_colors(
+    element: etree._Element,
+    box: Box | None,
+    usage: Usage,
+    theme: dict[str, str],
+    clr_map: dict[str, str],
+) -> None:
+    area = box.area if box is not None else 0
+
+    for fill in element.findall(f".//{{{A_NS}}}solidFill"):
+        parent = fill.getparent()
+        parent_tag = etree.QName(parent).localname if parent is not None else ""
+        if parent_tag in ("rPr", "defRPr", "endParaRPr"):
+            role = ROLE_TEXT
+        elif parent_tag == "ln":
+            role = ROLE_LINE
+        else:
+            role = ROLE_FILL
+        color = resolve_color(fill, theme, clr_map)
+        if color is None:
+            continue
+        key = (color.rgb, role)
+        usage.color_counts[key] += 1
+        # Цвет текста взвешивается упоминаниями, а не площадью: площадь букв
+        # мала, а значение цвета для облика шаблона велико.
+        usage.colors[key] += area if role == ROLE_FILL else 0
+
+
+def _collect_typography(element: etree._Element, usage: Usage, on_slide: bool) -> None:
+    counter = usage.fonts if on_slide else usage.fonts_declared
+    for latin in element.findall(f".//{{{A_NS}}}latin"):
+        family = latin.get("typeface")
+        if family and not family.startswith("+"):
+            counter[family] += 1
+    for node in element.iter():
+        tag = etree.QName(node).localname
+        if tag in ("rPr", "defRPr") and node.get("sz"):
+            try:
+                usage.sizes[round(int(node.get("sz")) / 100, 2)] += 1
+            except ValueError:
+                continue
+
+
+def _has_text(element: etree._Element) -> bool:
+    return any(
+        (node.text or "").strip()
+        for node in element.findall(f".//{{{A_NS}}}t")
+    )
+
+
+def _collect_edges(
+    element: etree._Element, box: Box | None, slide_w: int, slide_h: int, usage: Usage
+) -> None:
+    """Рёбра контентных фигур — исходные данные для полей и сетки.
+
+    Учитываются только фигуры с текстом. Декор полям не свидетель: полосы,
+    подложки и фоновые паттерны прижаты к краям слайда, и их рёбра тянут
+    поля к нулю. На `vk_workspace` это давало верхнее поле 0.00 дюйма и
+    нижнее 7.51 при высоте слайда 7.5.
+
+    Фигура, прижатая к краю, пропускается и по каждой стороне отдельно:
+    текстовый блок может упираться в правый край, оставаясь содержательным
+    слева.
+    """
+    if box is None or not _has_text(element):
+        return
+    if box.x > EDGE_HUG_EMU:
+        usage.left_edges.append(box.x)
+    if slide_w - box.right > EDGE_HUG_EMU:
+        usage.right_edges.append(slide_w - box.right)
+    if box.y > EDGE_HUG_EMU:
+        usage.top_edges.append(box.y)
+    if slide_h - box.bottom > EDGE_HUG_EMU:
+        usage.bottom_edges.append(slide_h - box.bottom)
+
+
+def collect(
+    containers: list[etree._Element],
+    theme: dict[str, str],
+    clr_map: dict[str, str],
+    slide_w: int,
+    slide_h: int,
+    usage: Usage | None = None,
+    on_slide: bool = True,
+) -> Usage:
+    """Обходит деревья фигур и накапливает статистику.
+
+    `on_slide` различает источник: слайд показывает, чем набрано на самом
+    деле, мастер и layout — чем объявлено набирать.
+    """
+    usage = usage or Usage()
+    for container in containers:
+        for element, box, _ in iter_shapes(container):
+            _collect_colors(element, box, usage, theme, clr_map)
+            _collect_typography(element, usage, on_slide)
+            _collect_edges(element, box, slide_w, slide_h, usage)
+    return usage
+
+
+def build_palette(usage: Usage, theme: dict[str, str]) -> list[ColorToken]:
+    """Палитра, упорядоченная по значимости цвета в шаблоне.
+
+    Значимость — закрашенная площадь для заливок и число употреблений для
+    текста и линий. Цвета, объявленные темой, помечаются её слотом: рендереру
+    правильнее записать такой цвет обратно как `schemeClr`, чтобы он продолжил
+    жить по правилам шаблона, а не застыл константой.
+    """
+    by_rgb: dict[str, dict[str, int]] = defaultdict(lambda: {"area": 0, "count": 0})
+    roles: dict[str, set[str]] = defaultdict(set)
+    for (rgb, role), area in usage.colors.items():
+        by_rgb[rgb]["area"] += area
+        by_rgb[rgb]["count"] += usage.color_counts[(rgb, role)]
+        roles[rgb].add(role)
+
+    theme_slots = {value: slot for slot, value in theme.items()}
+
+    tokens: list[ColorToken] = []
+    for rgb, stats in by_rgb.items():
+        slot = theme_slots.get(rgb)
+        tokens.append(
+            ColorToken(
+                color=Color(rgb=rgb, scheme=slot),
+                usage_count=stats["count"],
+                painted_area_emu=stats["area"],
+                roles=sorted(roles[rgb]),
+                provenance=Provenance(
+                    kind=SourceKind.SLIDE if slot is None else SourceKind.THEME,
+                    ref="статистика употребления",
+                    note=(
+                        "цвет объявлен темой и подтверждён употреблением"
+                        if slot
+                        else "цвет употребляется, но в теме не объявлен"
+                    ),
+                ),
+            )
+        )
+    # Сначала то, что красит больше площади; при равной площади — что чаще.
+    tokens.sort(key=lambda t: (t.painted_area_emu, t.usage_count), reverse=True)
+    return tokens
+
+
+def build_fonts(usage: Usage, theme_families: list[str]) -> list[FontToken]:
+    """Гарнитуры шаблона в порядке значимости.
+
+    Первыми идут те, которыми набрано на слайдах: их видит читатель. Дальше
+    объявленные в мастерах и layout'ах, но не употреблённые, и в самом конце
+    объявленные темой. Без такого порядка гарнитурой шаблона становится
+    умолчание мастера — у всех трёх шаблонов датасета это `Arial` или
+    `Calibri`, при том что набрано везде шрифтом `Play`.
+    """
+    tokens = [
+        FontToken(family=family, usage_count=count)
+        for family, count in usage.fonts.most_common()
+    ]
+    known = {token.family for token in tokens}
+    for family, count in usage.fonts_declared.most_common():
+        if family not in known:
+            tokens.append(FontToken(family=family, usage_count=count))
+            known.add(family)
+    tokens.extend(
+        FontToken(family=family, usage_count=0)
+        for family in theme_families
+        if family not in known
+    )
+    return tokens
+
+
+def build_type_scale(usage: Usage) -> list[float]:
+    """Типографическая шкала кластеризацией фактических кеглей.
+
+    Редакторы оставляют дробные значения после масштабирования (8.12, 14.06),
+    и без слияния близких ступеней шкала превращается в перечень всех
+    встреченных чисел. А уменьшать кегль при переполнении можно только по
+    шкале шаблона — значит шкала обязана быть короткой и осмысленной.
+    """
+    if not usage.sizes:
+        return []
+    total = sum(usage.sizes.values())
+    ordered = sorted(usage.sizes.items())
+
+    clusters: list[list[tuple[float, int]]] = []
+    for size, count in ordered:
+        if clusters and size - clusters[-1][-1][0] <= SCALE_TOLERANCE_PT:
+            clusters[-1].append((size, count))
+        else:
+            clusters.append([(size, count)])
+
+    scale: list[float] = []
+    for cluster in clusters:
+        weight = sum(count for _, count in cluster)
+        if weight / total < SCALE_MIN_SHARE:
+            continue
+        # Представитель ступени — самый употребительный кегль в ней.
+        scale.append(max(cluster, key=lambda item: item[1])[0])
+    return sorted(set(scale))
+
+
+def _dominant_edge(edges: list[int]) -> int:
+    """Первая направляющая, на которой стоит достаточно фигур.
+
+    Поле шаблона — **самая близкая к краю** направляющая, которую держит
+    заметное число блоков, а не самая населённая вообще. Внутри колоды почти
+    всегда есть вертикаль, у которой блоков больше, чем у внешнего поля
+    (вторая колонка, отступ списка), и выбор по населённости уводит поле
+    вглубь слайда: на `vk_tech` это давало левое поле 4.69 дюйма.
+    """
+    if not edges:
+        return 0
+    ordered = sorted(edges)
+    clusters: list[list[int]] = [[ordered[0]]]
+    for value in ordered[1:]:
+        if value - clusters[-1][-1] <= EDGE_TOLERANCE_EMU:
+            clusters[-1].append(value)
+        else:
+            clusters.append([value])
+    for cluster in clusters:
+        if len(cluster) >= MIN_EDGE_SUPPORT:
+            return round(sum(cluster) / len(cluster))
+    return 0
+
+
+def build_grid(usage: Usage) -> Grid | None:
+    """Поля, выведенные кластеризацией рёбер контентных фигур.
+
+    Поле — не самое левое ребро, а то, на котором фигур больше всего:
+    единственный блок, выехавший к краю, полем шаблона не является.
+    """
+    left = _dominant_edge(usage.left_edges)
+    right = _dominant_edge(usage.right_edges)
+    top = _dominant_edge(usage.top_edges)
+    bottom = _dominant_edge(usage.bottom_edges)
+    if not any((left, right, top, bottom)):
+        return None
+    return Grid(
+        margin_left_emu=max(0, left),
+        margin_right_emu=max(0, right),
+        margin_top_emu=max(0, top),
+        margin_bottom_emu=max(0, bottom),
+        provenance=Provenance(
+            kind=SourceKind.DERIVED,
+            ref="кластеризация рёбер контентных фигур",
+            confidence=0.8,
+            note="поле определено по наиболее поддержанной направляющей",
+        ),
+    )

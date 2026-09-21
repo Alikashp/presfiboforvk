@@ -28,6 +28,7 @@ from deckwright.schemas import (
     ContentPack,
     DeckIR,
     DeckPlan,
+    FontSubstitution,
     ModelUsage,
     RunManifest,
     StageTiming,
@@ -93,9 +94,26 @@ def run_variant(
     )
 
     with _timed(manifest, "parse"):
-        spec = parse_template(template_path)
+        # Кэш по хэшу файла: три варианта вёрстки разбирают один и тот же
+        # шаблон, а разбор колоды на полсотни слайдов занимает секунды.
+        spec = parse_template(
+            template_path,
+            cache_dir=cfg.template.cache_dir,
+            font_dir=cfg.fonts.extract_dir,
+        )
     manifest.template_sha256 = spec.template_sha256
     manifest.warnings.extend(spec.warnings)
+    # Подстановка шрифта расходится с задумкой дизайнера и ломает измерение
+    # текста, поэтому она обязана быть видна в паспорте прогона.
+    manifest.font_substitutions.extend(
+        FontSubstitution(
+            requested=token.family,
+            used=token.substituted_with or "системный подбор",
+            reason="шрифт не встроен в шаблон и не извлечён",
+        )
+        for token in spec.fonts
+        if token.usage_count > 0 and not token.embedded
+    )
 
     slide_count = cfg.deck.slide_count or cfg.deck.min_slides
     with _timed(manifest, "plan"):
