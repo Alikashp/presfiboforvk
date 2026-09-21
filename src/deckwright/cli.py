@@ -155,15 +155,43 @@ def _cmd_probe(args: argparse.Namespace) -> int:
         return 1
     print()
 
+    # Шаблон нужен, чтобы промпт ушёл в модель таким же, каким уходит в
+    # настоящем прогоне: с ограничениями длины, посчитанными по его рамкам.
+    # Без шаблона проба проверяет не тот промпт, который потом работает.
+    spec = None
+    if args.template:
+        from deckwright.parse.opener import parse_template
+
+        spec = parse_template(
+            args.template,
+            cache_dir=cfg.template.cache_dir,
+            font_dir=cfg.fonts.extract_dir,
+        )
+
     started = time.monotonic()
     failed = False
+    budget = None
     try:
-        plan, _ = build_plan(pack, client, slide_count)
+        plan, _, budget = build_plan(
+            pack,
+            client,
+            slide_count,
+            spec=spec,
+            max_bullets=cfg.audit.max_bullets_per_slide,
+            max_words_per_bullet=cfg.audit.max_words_per_bullet,
+            substitution_slack=cfg.fonts.substitution_slack,
+        )
     except Exception as exc:  # диагностика обязана досказать, что произошло
         failed = True
         print(f"ОШИБКА: {exc}", file=sys.stderr)
         plan = None
     elapsed = round(time.monotonic() - started, 2)
+
+    if budget is not None:
+        print(
+            f"бюджет длины    : заголовок {budget.title_chars}, "
+            f"пункт {budget.bullet_chars} симв; мерили: {budget.measured_with}"
+        )
 
     print(f"время           : {elapsed} с")
     print(f"вызовов         : {client.calls}")
@@ -242,6 +270,11 @@ def main(argv: list[str] | None = None) -> int:
     probe.add_argument("--config", default=str(DEFAULT_CONFIG), help="Путь к config.yaml.")
     probe.add_argument("--content", required=True, help="Контент-пакет в JSON.")
     probe.add_argument("--save", default=None, help="Куда сохранить полученный план.")
+    probe.add_argument(
+        "--template",
+        default=None,
+        help="Шаблон, по которому считать ограничения длины для промпта.",
+    )
     probe.add_argument(
         "--price-in", type=float, default=None, help="Цена за 1M входных токенов."
     )

@@ -144,7 +144,48 @@ def _text_color(
     return None
 
 
-def _layout_slots(layout, style: TextStyle, theme, clr_map, fallback: Color) -> list[Slot]:
+# Какой раздел `p:txStyles` мастера отвечает за роль плейсхолдера. Так же
+# разрешает наследование и сам PowerPoint: кегль, не объявленный в layout'е,
+# берётся из стиля мастера, а не выдумывается.
+_MASTER_STYLE_BY_ROLE: dict[SlotRole, str] = {
+    SlotRole.TITLE: "titleStyle",
+    SlotRole.SUBTITLE: "bodyStyle",
+    SlotRole.BODY: "bodyStyle",
+}
+
+
+def _master_sizes_pt(master) -> dict[str, float]:
+    """Кегли первого уровня из `p:txStyles` мастера.
+
+    Зачем. Большинство layout'ов кегль заголовка не объявляют вовсе — он
+    наследуется. Раньше на их месте вставлялась середина типографической
+    шкалы, и у чужого шаблона заголовок оказывался набран двадцатым кеглем
+    вместо сорок четвёртого: бюджет заголовка вырастал вчетверо и просил у
+    модели абзац там, где рамка держит строку.
+    """
+    tx_styles = master._element.find(f"{{{P_NS}}}txStyles")
+    if tx_styles is None:
+        return {}
+    sizes: dict[str, float] = {}
+    for style_name in ("titleStyle", "bodyStyle", "otherStyle"):
+        node = tx_styles.find(f"{{{P_NS}}}{style_name}")
+        if node is None:
+            continue
+        level = node.find(f"{{{A_NS}}}lvl1pPr")
+        def_rpr = level.find(f"{{{A_NS}}}defRPr") if level is not None else None
+        if def_rpr is not None and def_rpr.get("sz"):
+            sizes[style_name] = int(def_rpr.get("sz")) / 100
+    return sizes
+
+
+def _layout_slots(
+    layout,
+    style: TextStyle,
+    theme,
+    clr_map,
+    fallback: Color,
+    master_sizes: dict[str, float],
+) -> list[Slot]:
     slots: list[Slot] = []
     for shape in layout.placeholders:
         if None in (shape.left, shape.top, shape.width, shape.height):
@@ -153,14 +194,17 @@ def _layout_slots(layout, style: TextStyle, theme, clr_map, fallback: Color) -> 
             continue
         fmt = shape.placeholder_format
         color = _text_color(shape._element, theme, clr_map) or fallback
-        size = _slot_size_pt(shape._element)
+        role = _placeholder_role(shape._element)
+        size = _slot_size_pt(shape._element) or master_sizes.get(
+            _MASTER_STYLE_BY_ROLE.get(role, "otherStyle")
+        )
         updates = {"color": color}
         if size:
             updates["size_pt"] = size
         slots.append(
             Slot(
                 id=f"ph{fmt.idx}",
-                role=_placeholder_role(shape._element),
+                role=role,
                 box=Box(x=shape.left, y=shape.top, w=shape.width, h=shape.height),
                 style=style.model_copy(update=updates),
                 placeholder_text=shape.text_frame.text if shape.has_text_frame else "",
@@ -183,6 +227,7 @@ def _parse(path: Path, font_dir: Path | None) -> TemplateSpec:
     usage = tokens_mod.Usage()
     for master in prs.slide_masters:
         clr_map = tokens_mod.color_map(master._element)
+        master_sizes = _master_sizes_pt(master)
         trees = [_shape_tree(master._element)]
         trees += [_shape_tree(layout._element) for layout in master.slide_layouts]
         tokens_mod.collect(
@@ -288,7 +333,9 @@ def _parse(path: Path, font_dir: Path | None) -> TemplateSpec:
                     id=layout_id,
                     name=layout.name,
                     master_id=master_id,
-                    slots=_layout_slots(layout, base_style, theme, clr_map, fallback),
+                    slots=_layout_slots(
+                        layout, base_style, theme, clr_map, fallback, master_sizes
+                    ),
                     background=background,
                     is_dark=dark,
                 )

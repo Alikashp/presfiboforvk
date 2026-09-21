@@ -11,14 +11,23 @@ ENV PYTHONUNBUFFERED=1 \
 # libeot0 — распаковка встроенных в шаблон шрифтов: .fntdata это EOT с
 # MTX-сжатием, срезом заголовка не достаётся. Вызывается через ctypes
 # (EOT2ttf_buffer), отдельного CLI в дистрибутиве нет.
-# fonts-* — метрически предсказуемый fallback, когда шрифт шаблона
-# распаковать не удалось.
+# fonts-* — подстановка, когда шрифт шаблона распаковать не удалось. Три
+# из них метрически совпадают с проприетарными оригиналами, то есть дают те
+# же ширины символов при другом рисунке: carlito ↔ Calibri, caladea ↔
+# Cambria, liberation ↔ Arial / Times New Roman / Courier New. Без них
+# Calibri подменялся DejaVu, ширины расходились, и бюджет длины заголовка
+# считался по чужой гарнитуре. dejavu остаётся крайним случаем — для
+# шрифтов, у которых свободного клона нет.
+# Подставляются они только для измерения текста и рендера внутри
+# контейнера; в сам .pptx всегда пишется имя шрифта из шаблона.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libreoffice-impress \
         poppler-utils \
         libeot0 \
         fonts-dejavu-core \
         fonts-liberation \
+        fonts-crosextra-carlito \
+        fonts-crosextra-caladea \
         fontconfig \
     && rm -rf /var/lib/apt/lists/*
 

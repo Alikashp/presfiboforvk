@@ -32,6 +32,15 @@ class RecordedClient:
     def __init__(self, recordings_dir: str | Path) -> None:
         self._dir = Path(recordings_dir)
         self.calls = 0
+        # Счётчики живого клиента. Записям они всегда нулевые, но читает их
+        # диагностика пробы, и без них она падает на попытке отчитаться.
+        self.retries = 0
+        self.thinking_blocks = 0
+        self.rate_limit_hits = 0
+        self.prompt_tokens = 0
+        self.completion_tokens = 0
+        self.dropped_params: set[str] = set()
+        self.last_raw = ""
 
     def complete(
         self,

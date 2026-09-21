@@ -17,6 +17,7 @@ from pathlib import Path
 
 from deckwright.config import Config
 from deckwright.layout.matcher import build_deck_ir
+from deckwright.layout.text_metrics import metrics_for_spec
 from deckwright.llm.base import StructuredClient
 from deckwright.parse.opener import parse_template
 from deckwright.plan.planner import build_plan
@@ -105,14 +106,28 @@ def run_variant(
     manifest.warnings.extend(spec.warnings)
     # Подстановка шрифта расходится с задумкой дизайнера и ломает измерение
     # текста, поэтому она обязана быть видна в паспорте прогона.
+    # Чем мерили текст и можно ли этому верить — в паспорт прогона.
+    source = metrics_for_spec(spec)
+    if source.substituted:
+        manifest.font_substitutions.append(
+            FontSubstitution(
+                requested=source.requested,
+                used=source.used,
+                reason=(
+                    "метрически совместимый клон: ширины совпадают, вёрстка не сдвигается"
+                    if source.metric_compatible
+                    else "ширины не совпадают с оригиналом, бюджет длины ужат"
+                ),
+            )
+        )
     manifest.font_substitutions.extend(
         FontSubstitution(
             requested=token.family,
-            used=token.substituted_with or "системный подбор",
-            reason="шрифт не встроен в шаблон и не извлечён",
+            used="системный подбор",
+            reason="шрифт не встроен в шаблон",
         )
         for token in spec.fonts
-        if token.usage_count > 0 and not token.embedded
+        if token.usage_count > 0 and not token.embedded and token.family != source.requested
     )
 
     slide_count = cfg.deck.slide_count or cfg.deck.min_slides
@@ -124,6 +139,7 @@ def run_variant(
             spec=spec,
             max_bullets=cfg.audit.max_bullets_per_slide,
             max_words_per_bullet=cfg.audit.max_words_per_bullet,
+            substitution_slack=cfg.fonts.substitution_slack,
         )
     if budget is not None:
         manifest.warnings.append(

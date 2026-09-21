@@ -174,3 +174,39 @@ def test_declared_fonts_rank_below_used_ones():
     families = [token.family for token in build_fonts(usage, ["Arial"])]
     assert families[0] == "Play"
     assert families[-1] == "Arial"
+
+
+def test_layout_inherits_its_size_from_the_master(template_paths):
+    """Кегль, не объявленный в layout'е, берётся из `p:txStyles` мастера.
+
+    Так его разрешает PowerPoint. Пока вместо этого подставлялась середина
+    типографической шкалы, заголовки чужого шаблона считались набранными
+    двадцатым кеглем вместо сорок четвёртого — и бюджет длины заголовка
+    вырастал с тридцати символов до двухсот семидесяти семи, то есть просил
+    у модели абзац в рамку на одну строку.
+    """
+    import re
+    import zipfile
+
+    for path in template_paths:
+        spec = parse_template(path)
+        with zipfile.ZipFile(path) as archive:
+            master = archive.read("ppt/slideMasters/slideMaster1.xml").decode("utf-8")
+        block = re.search(r"<p:titleStyle>.*?</p:titleStyle>", master, re.S)
+        if block is None:
+            continue
+        found = re.search(r'sz="(\d+)"', block.group(0))
+        if found is None:
+            continue
+        declared = int(found.group(1)) / 100
+
+        inherited = [
+            slot.style.size_pt
+            for layout in spec.layouts
+            for slot in layout.slots
+            if slot.role is SlotRole.TITLE and slot.style is not None
+        ]
+        assert declared in inherited, (
+            f"{path.name}: кегль заголовка из мастера ({declared} pt) не "
+            f"достался ни одному layout'у: {sorted(set(inherited))}"
+        )

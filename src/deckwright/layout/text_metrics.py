@@ -175,48 +175,150 @@ def characters_that_fit(
     return lines * per_line
 
 
-# Куда смотреть за подстановкой, когда шрифт шаблона извлечь не удалось.
-# Порядок не случаен: сначала метрически близкие к распространённым
-# гарнитурам, потом что угодно с кириллицей.
 FALLBACK_FONT_DIRS = ("/usr/share/fonts", "/usr/local/share/fonts")
-FALLBACK_PREFERENCE = ("DejaVuSans.ttf", "LiberationSans-Regular.ttf", "FreeSans.ttf")
+
+# Метрически совместимые замены: те же ширины глифов, что у оригинала, при
+# другом рисунке. Подставленный такой клон не сдвигает вёрстку — строки
+# переносятся там же, где у человека с оригинальным шрифтом.
+#
+# Это не «похожие» шрифты. Carlito сделан как метрическая замена Calibri,
+# Caladea — Cambria, семейство Liberation — Arial, Times New Roman и Courier
+# New. Подставлять вместо Calibri, скажем, DejaVu Sans нельзя: он заметно
+# шире, и расчёт длины разойдётся с действительностью на десятки процентов.
+METRIC_CLONES: dict[str, tuple[str, ...]] = {
+    "calibri": ("Carlito-Regular.ttf",),
+    "cambria": ("Caladea-Regular.ttf",),
+    "arial": ("LiberationSans-Regular.ttf",),
+    "helvetica": ("LiberationSans-Regular.ttf",),
+    "times new roman": ("LiberationSerif-Regular.ttf",),
+    "times": ("LiberationSerif-Regular.ttf",),
+    "courier new": ("LiberationMono-Regular.ttf",),
+    "courier": ("LiberationMono-Regular.ttf",),
+}
+
+# Чем подставлять, когда метрического клона для гарнитуры не существует.
+GENERIC_FALLBACKS = (
+    "DejaVuSans.ttf",
+    "LiberationSans-Regular.ttf",
+    "FreeSans.ttf",
+)
 
 
-def _system_font() -> str | None:
+def _find_font_file(names: tuple[str, ...]) -> str | None:
     for directory in FALLBACK_FONT_DIRS:
         root = Path(directory)
         if not root.is_dir():
             continue
-        for name in FALLBACK_PREFERENCE:
+        for name in names:
             found = next(root.rglob(name), None)
             if found is not None:
                 return str(found)
-        any_ttf = next(root.rglob("*.ttf"), None)
-        if any_ttf is not None:
-            return str(any_ttf)
     return None
 
 
-def metrics_for_spec(spec) -> tuple[FontMetrics | None, str]:
-    """Метрики основной гарнитуры шаблона. Возвращает (метрики, пояснение).
+def _system_font() -> str | None:
+    found = _find_font_file(GENERIC_FALLBACKS)
+    if found is not None:
+        return found
+    for directory in FALLBACK_FONT_DIRS:
+        root = Path(directory)
+        if root.is_dir():
+            any_ttf = next(root.rglob("*.ttf"), None)
+            if any_ttf is not None:
+                return str(any_ttf)
+    return None
 
-    Предпочтение — шрифту, извлечённому из шаблона: только он даёт те самые
-    ширины, по которым дизайнер верстал. Подстановка возможна, но она обязана
-    быть названа: расчёт на её метриках расходится с тем, что увидит человек.
+
+@dataclass(frozen=True)
+class MeasurementSource:
+    """Чем меряли текст и насколько этому можно верить."""
+
+    metrics: FontMetrics | None
+    requested: str
+    used: str
+    # Совместим ли подставленный шрифт метрически с запрошенным. Только от
+    # этого зависит, нужен ли запас на расхождение ширин.
+    metric_compatible: bool
+    description: str
+
+    @property
+    def substituted(self) -> bool:
+        return self.metrics is not None and self.used != self.requested
+
+
+def metrics_for_spec(spec) -> MeasurementSource:
+    """Чем мерить текст этого шаблона.
+
+    Порядок предпочтений: шрифт, извлечённый из шаблона (единственный, что
+    даёт настоящие ширины); метрически совместимый клон (даёт те же ширины
+    при другом рисунке); что-нибудь ещё (ширины свои, и на это нужен запас).
     """
     for token in spec.fonts:
         if token.embedded and token.file_path:
             try:
-                return load_metrics(token.file_path), f"шрифт шаблона {token.family}"
+                metrics = load_metrics(token.file_path)
             except FontUnavailable:
                 continue
+            return MeasurementSource(
+                metrics=metrics,
+                requested=token.family,
+                used=token.family,
+                metric_compatible=True,
+                description=f"шрифт шаблона {token.family}",
+            )
 
-    fallback = _system_font()
-    if fallback is None:
-        return None, "шрифтов нет вовсе: измерить текст нечем"
-    wanted = spec.fonts[0].family if spec.fonts else "?"
+    wanted = spec.fonts[0].family if spec.fonts else ""
+    clone_names = METRIC_CLONES.get(wanted.strip().lower())
+    if clone_names:
+        path = _find_font_file(clone_names)
+        if path is not None:
+            try:
+                metrics = load_metrics(path)
+            except FontUnavailable:
+                metrics = None
+            if metrics is not None:
+                return MeasurementSource(
+                    metrics=metrics,
+                    requested=wanted,
+                    used=metrics.family,
+                    metric_compatible=True,
+                    description=(
+                        f"метрический клон {metrics.family} вместо {wanted}: "
+                        "ширины совпадают"
+                    ),
+                )
+
+    path = _system_font()
+    if path is None:
+        return MeasurementSource(
+            metrics=None,
+            requested=wanted,
+            used="",
+            metric_compatible=False,
+            description="шрифтов нет вовсе: измерить текст нечем",
+        )
     try:
-        metrics = load_metrics(fallback)
+        metrics = load_metrics(path)
     except FontUnavailable as exc:
-        return None, str(exc)
-    return metrics, f"подстановка {metrics.family} вместо {wanted}"
+        return MeasurementSource(None, wanted, "", False, str(exc))
+    # Системный шрифт может оказаться ровно тем, что просил шаблон: DejaVu
+    # Sans стоит в образе и встречается в шаблонах. Это не подстановка, и
+    # запас на неё требовать не за что.
+    if wanted and metrics.family.strip().lower() == wanted.strip().lower():
+        return MeasurementSource(
+            metrics=metrics,
+            requested=wanted,
+            used=metrics.family,
+            metric_compatible=True,
+            description=f"системный шрифт {metrics.family}, он же шрифт шаблона",
+        )
+    return MeasurementSource(
+        metrics=metrics,
+        requested=wanted or "?",
+        used=metrics.family,
+        metric_compatible=False,
+        description=(
+            f"подстановка {metrics.family} вместо {wanted or 'неизвестной гарнитуры'}: "
+            "ширины не совпадают, нужен запас"
+        ),
+    )

@@ -223,3 +223,90 @@ def test_pattern_profile_describes_structure_without_a_class():
     assert pattern.slot_profile == {SlotRole.BODY: 1}
     assert pattern.fits({SlotRole.BODY: 1})
     assert not pattern.fits({SlotRole.CHART: 1})
+
+
+# ── Верность шрифтам шаблона ─────────────────────────────────────────────────
+#
+# Два требования, которые легко нарушить незаметно, потому что колода при
+# нарушении всё равно собирается и открывается.
+#
+# Первое: имя шрифта в `.pptx` обязано остаться тем, что в шаблоне. Клоны
+# (Carlito вместо Calibri, Liberation Sans вместо Arial) нужны только для
+# измерения текста и рендера внутри контейнера. Записать имя клона в файл
+# значит отдать человеку колоду, которая у него в PowerPoint откроется чужой
+# гарнитурой, — и аудит справедливо скажет, что шрифт не из шаблона.
+#
+# Второе: встроенные в шаблон шрифты обязаны доехать до результата. Иначе у
+# человека без этой гарнитуры колода откроется не тем, чем задумана, —
+# и встраивание, за которое дизайнер заплатил размером файла, пропадает зря.
+
+
+def _fonts_written_into(pptx_path: Path) -> set[str]:
+    """Гарнитуры, названные в слайдах результата."""
+    import re
+    import zipfile
+
+    with zipfile.ZipFile(pptx_path) as archive:
+        slides = [
+            archive.read(name).decode("utf-8")
+            for name in archive.namelist()
+            if name.startswith("ppt/slides/slide") and name.endswith(".xml")
+        ]
+    return {
+        match
+        for xml in slides
+        for match in re.findall(r'typeface="([^"+][^"]*)"', xml)
+    }
+
+
+def _font_parts_of(pptx_path: Path) -> set[str]:
+    import zipfile
+
+    with zipfile.ZipFile(pptx_path) as archive:
+        return {n for n in archive.namelist() if n.endswith(".fntdata")}
+
+
+@pytest.fixture(scope="module")
+def embedded_font_deck(synthetic, recorded_dir, tmp_path_factory):
+    path = next(p for p in synthetic if p.stem == "embedded_font")
+    result = run_variant(
+        template_path=path,
+        pack=_pack(),
+        cfg=load_config("configs/config.yaml"),
+        client=RecordedClient(recorded_dir),
+        variant="balanced",
+        output_dir=tmp_path_factory.mktemp("fonts"),
+    )
+    return path, result
+
+
+def test_substituted_clone_never_reaches_the_file(embedded_font_deck):
+    """Мерили Carlito — записали Calibri."""
+    from deckwright.layout.text_metrics import METRIC_CLONES, metrics_for_spec
+
+    _, result = embedded_font_deck
+    source = metrics_for_spec(result.spec)
+    assert source.substituted, (
+        "шаблон на Calibri обязан мериться подстановкой: иначе тест ничего "
+        "не проверяет"
+    )
+
+    written = _fonts_written_into(result.pptx)
+    clones = {name.split("-")[0].lower() for files in METRIC_CLONES.values() for name in files}
+    assert not {f.lower() for f in written} & clones, (
+        f"в слайды попало имя подставленного клона: {written}"
+    )
+    assert "Calibri" in written, f"имя шрифта шаблона потеряно: {written}"
+
+
+def test_embedded_fonts_travel_into_the_deck(embedded_font_deck):
+    """Части `.fntdata` и объявление `embeddedFontLst` доезжают до результата."""
+    import zipfile
+
+    template, result = embedded_font_deck
+    assert _font_parts_of(template), "фикстура без встроенного шрифта: тест пуст"
+    assert _font_parts_of(result.pptx) == _font_parts_of(template)
+
+    with zipfile.ZipFile(result.pptx) as archive:
+        presentation = archive.read("ppt/presentation.xml").decode("utf-8")
+    assert "embeddedFontLst" in presentation
