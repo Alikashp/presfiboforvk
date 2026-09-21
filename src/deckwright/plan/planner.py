@@ -19,7 +19,8 @@ import yaml
 from pydantic import BaseModel, Field
 
 from deckwright.llm.base import StructuredClient
-from deckwright.schemas import ContentPack, DeckPlan, PromptVersion
+from deckwright.plan.budget import LengthBudget, compute_budget
+from deckwright.schemas import ContentPack, DeckPlan, PromptVersion, TemplateSpec
 
 PROMPTS_DIR = Path(__file__).resolve().parents[3] / "prompts"
 
@@ -55,9 +56,21 @@ def load_prompt(name: str, prompts_dir: str | Path | None = None) -> Prompt:
 
 
 def _format_facts(pack: ContentPack) -> str:
+    """Факты с их числовыми значениями.
+
+    Значение показывается отдельно, чтобы модель могла сослаться на него в
+    формуле выведенного числа: без этого она не знает, что `f1` — это 42.
+    """
     if not pack.facts:
         return "(фактов не предоставлено)"
-    return "\n".join(f"- [{fact.id}] {fact.text}" for fact in pack.facts)
+    lines = []
+    for fact in pack.facts:
+        numeric = ""
+        if fact.value is not None:
+            unit = f" {fact.unit}" if fact.unit else ""
+            numeric = f"  (значение: {fact.value}{unit})"
+        lines.append(f"- [{fact.id}] {fact.text}{numeric}")
+    return "\n".join(lines)
 
 
 def _format_series(pack: ContentPack) -> str:
@@ -75,10 +88,31 @@ def build_plan(
     pack: ContentPack,
     client: StructuredClient,
     slide_count: int,
+    spec: TemplateSpec | None = None,
+    max_bullets: int = 6,
+    max_words_per_bullet: int = 15,
     prompts_dir: str | Path | None = None,
-) -> tuple[DeckPlan, Prompt]:
-    """Возвращает план и использованный промпт — последний нужен манифесту."""
-    prompt = load_prompt("plan_deck.v1", prompts_dir)
+) -> tuple[DeckPlan, Prompt, LengthBudget | None]:
+    """План, использованный промпт и бюджеты длины.
+
+    Бюджеты считаются по шаблону, если он передан: у каждого шаблона своя
+    заголовочная рамка и свой кегль, и «слишком длинно» у них разное. Без
+    шаблона модель работает по одним порогам плотности из ТЗ — план тогда
+    может не влезть, и разбираться с этим придётся фиттеру.
+    """
+    prompt = load_prompt("plan_deck.v2", prompts_dir)
+    budget = (
+        compute_budget(spec, max_bullets, max_words_per_bullet) if spec is not None else None
+    )
+    limits = (
+        budget.as_prompt_lines()
+        if budget is not None
+        else (
+            f"- пунктов на слайде: не больше {max_bullets}\n"
+            f"- пункт списка: не длиннее {max_words_per_bullet} слов"
+        )
+    )
+
     brief = pack.brief
     text = prompt.render(
         topic=brief.topic,
@@ -90,6 +124,7 @@ def build_plan(
         facts=_format_facts(pack),
         series=_format_series(pack),
         slide_count=slide_count,
+        length_limits=limits,
     )
     plan = client.complete(step=prompt.step, prompt=text, schema=DeckPlan)
-    return plan, prompt
+    return plan, prompt, budget

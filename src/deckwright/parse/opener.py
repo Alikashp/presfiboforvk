@@ -113,6 +113,21 @@ def _placeholder_role(element: etree._Element) -> SlotRole:
     return _PH_ROLE.get(ph[0].get("type", "body"), SlotRole.BODY)
 
 
+def _slot_size_pt(element: etree._Element) -> float | None:
+    """Кегль, которым шаблон набирает этот плейсхолдер.
+
+    Позиция в шкале — плохая замена: верх шкалы у шаблона занят обложечными
+    размерами (у `vk_education` это 60 pt), и считать по ним бюджет рабочего
+    заголовка значит получить двадцать символов вместо полусотни.
+    """
+    sizes = [
+        int(node.get("sz")) / 100
+        for node in element.iter()
+        if etree.QName(node).localname in ("defRPr", "rPr") and node.get("sz")
+    ]
+    return max(sizes) if sizes else None
+
+
 def _text_color(
     element: etree._Element, theme: dict[str, str], clr_map: dict[str, str]
 ) -> Color | None:
@@ -138,12 +153,16 @@ def _layout_slots(layout, style: TextStyle, theme, clr_map, fallback: Color) -> 
             continue
         fmt = shape.placeholder_format
         color = _text_color(shape._element, theme, clr_map) or fallback
+        size = _slot_size_pt(shape._element)
+        updates = {"color": color}
+        if size:
+            updates["size_pt"] = size
         slots.append(
             Slot(
                 id=f"ph{fmt.idx}",
                 role=_placeholder_role(shape._element),
                 box=Box(x=shape.left, y=shape.top, w=shape.width, h=shape.height),
-                style=style.model_copy(update={"color": color}),
+                style=style.model_copy(update=updates),
                 placeholder_text=shape.text_frame.text if shape.has_text_frame else "",
                 ph_idx=fmt.idx,
                 provenance=Provenance(kind=SourceKind.LAYOUT, ref=layout.name),

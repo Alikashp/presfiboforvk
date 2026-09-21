@@ -117,7 +117,19 @@ def run_variant(
 
     slide_count = cfg.deck.slide_count or cfg.deck.min_slides
     with _timed(manifest, "plan"):
-        plan, prompt = build_plan(pack, client, slide_count)
+        plan, prompt, budget = build_plan(
+            pack,
+            client,
+            slide_count,
+            spec=spec,
+            max_bullets=cfg.audit.max_bullets_per_slide,
+            max_words_per_bullet=cfg.audit.max_words_per_bullet,
+        )
+    if budget is not None:
+        manifest.warnings.append(
+            f"бюджет длины ({budget.measured_with}): заголовок {budget.title_chars} симв, "
+            f"пункт {budget.bullet_chars} симв, до {budget.max_bullets} пунктов"
+        )
     manifest.prompts.append(prompt.as_manifest_entry())
     manifest.models.append(
         ModelUsage(

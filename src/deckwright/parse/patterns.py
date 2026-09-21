@@ -64,6 +64,12 @@ GRAPHIC_ROLES = {
 # содержательное место.
 MIN_SLOT_AREA_SHARE = 0.0004
 
+# Заголовок слайда занимает заметную долю его ширины. Крупный короткий текст
+# в узкой колонке — заголовок карточки, а не слайда, и путать их нельзя:
+# по заголовочным рамкам считается бюджет длины, и рамка шириной в карточку
+# уводит его в двадцать символов.
+TITLE_MIN_WIDTH_SHARE = 0.4
+
 # Шаг меньше половины размера элемента означает, что элементы лежат друг на
 # друге, а не стоят в ряд. Два блока, смещённые на волосок (тень, подложка),
 # сеткой не являются, но формально дают равномерный шаг.
@@ -114,7 +120,13 @@ def _signature(element: etree._Element, box: Box) -> tuple:
     )
 
 
-def _role_from_geometry(shape: _Shape, shapes: list[_Shape], slide_h: int) -> SlotRole:
+def _role_from_geometry(
+    shape: _Shape,
+    shapes: list[_Shape],
+    slide_h: int,
+    slide_w: int = 0,
+    inside_repeater: bool = False,
+) -> SlotRole:
     """Роль слота по структуре, а не по тексту-заглушке.
 
     Главный признак — ранг кегля среди текстовых фигур слайда: самый крупный
@@ -138,10 +150,16 @@ def _role_from_geometry(shape: _Shape, shapes: list[_Shape], slide_h: int) -> Sl
     rank = sized.index(shape.size_pt) if shape.size_pt in sized else len(sized)
 
     in_upper_half = shape.box.y < slide_h * 0.45
-    if rank == 0 and in_upper_half:
-        return SlotRole.TITLE
-    if rank == 1 and in_upper_half:
-        return SlotRole.SUBTITLE
+    # Внутри повторяющегося элемента заголовка слайда быть не может: это
+    # подпись карточки, сколько бы крупно она ни была набрана.
+    wide_enough = not slide_w or shape.box.w >= slide_w * TITLE_MIN_WIDTH_SHARE
+    if not inside_repeater and wide_enough:
+        if rank == 0 and in_upper_half:
+            return SlotRole.TITLE
+        if rank == 1 and in_upper_half:
+            return SlotRole.SUBTITLE
+    if inside_repeater and rank <= 1 and len(shape.text) <= 60:
+        return SlotRole.CAPTION
 
     # Очень крупный и очень короткий текст — числовой показатель, а не абзац:
     # «91 %», «XXX%», «42». Опознаётся по форме, а не по содержанию.
@@ -262,7 +280,7 @@ def _find_repeaters(
             axis, pitch, ordered = found[0], found[1], horizontal
 
         first = ordered[0]
-        item_slots = _slots_of(first, shapes, slide_h, prefix=f"r{index}")
+        item_slots = _slots_of(first, shapes, slide_h, prefix=f"r{index}", slide_w=slide_w)
         if not item_slots:
             continue
 
@@ -332,7 +350,7 @@ def _merge_repeaters(repeaters: list[Repeater]) -> list[Repeater]:
 
 
 def _slots_of(
-    parent: _Shape, all_shapes: list[_Shape], slide_h: int, prefix: str
+    parent: _Shape, all_shapes: list[_Shape], slide_h: int, prefix: str, slide_w: int = 0
 ) -> list[Slot]:
     """Слоты внутри одного элемента повторителя."""
     inner = [
@@ -352,7 +370,9 @@ def _slots_of(
         inner = [parent]
     slots: list[Slot] = []
     for position, shape in enumerate(inner):
-        role = _role_from_geometry(shape, inner or all_shapes, slide_h)
+        role = _role_from_geometry(
+            shape, inner or all_shapes, slide_h, slide_w, inside_repeater=True
+        )
         if role is SlotRole.DECOR:
             continue
         slots.append(
@@ -387,7 +407,7 @@ def mine_slide(
     for position, shape in enumerate(shapes):
         if id(shape.element) in consumed or shape.tag == "grpSp":
             continue
-        role = _role_from_geometry(shape, shapes, slide_h)
+        role = _role_from_geometry(shape, shapes, slide_h, slide_w)
         if role is SlotRole.DECOR:
             continue
         slots.append(
@@ -395,7 +415,11 @@ def mine_slide(
                 id=f"s{slide_index}_{position}",
                 role=role,
                 box=shape.box,
-                style=default_style,
+                style=(
+                    default_style.model_copy(update={"size_pt": shape.size_pt})
+                    if shape.size_pt > 0
+                    else default_style
+                ),
                 placeholder_text=shape.text[:80],
                 provenance=Provenance(kind=SourceKind.SLIDE, ref=f"slide{slide_index}"),
             )
