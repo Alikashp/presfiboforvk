@@ -67,9 +67,12 @@ def test_probe_runs_end_to_end_on_recorded_answers(monkeypatch, tmp_path, record
 
     template = build_template(tmp_path / "probe.pptx")
 
+    made: list[RecordedClient] = []
+
     class _Recorded(RecordedClient):
         def __init__(self, _cfg):
             super().__init__(recorded_dir)
+            made.append(self)
 
     monkeypatch.setattr(client_module, "LiveClient", _Recorded)
     monkeypatch.setattr(
@@ -87,12 +90,20 @@ def test_probe_runs_end_to_end_on_recorded_answers(monkeypatch, tmp_path, record
             str(Path(__file__).parent / "fixtures" / "content_pack.json"),
             "--template",
             str(template),
+            "--repeats",
+            "3",
             "--save",
             str(saved),
         ]
     )
     assert code == 0, "проба завершилась ошибкой на записанных ответах"
     assert saved.exists(), "план не сохранён"
+    # Разброс времени виден только на нескольких прогонах: один замер
+    # проверяет, что вызов проходит, а не сколько он занимает.
+    assert made and made[0].calls == 3, (
+        f"--repeats 3 обязан дать три вызова планировщика, а дал "
+        f"{made[0].calls if made else 0}"
+    )
 
 
 # ── Образ и CI обязаны ставить одно и то же ──────────────────────────────────

@@ -6,6 +6,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
+from statistics import median
 
 from deckwright.config import load_config
 from deckwright.environment import run_checks
@@ -168,24 +169,55 @@ def _cmd_probe(args: argparse.Namespace) -> int:
             font_dir=cfg.fonts.extract_dir,
         )
 
-    started = time.monotonic()
+    # Один замер ничего не говорит: скорость у провайдера плавает, и разница
+    # между 34 и 317 секундами на двух прогонах может оказаться и разницей
+    # нагрузки, и разницей в нашем запросе. Гоняем планировщик несколько раз
+    # и смотрим на разброс, а не на одно число.
+    #
+    # Счётчики клиента накапливаются, поэтому по каждому прогону берётся
+    # приращение, а не текущее значение.
+    def _counters() -> dict[str, int]:
+        return {
+            "prompt": client.prompt_tokens,
+            "completion": client.completion_tokens,
+            "retries": client.retries,
+            "thinking": client.thinking_blocks,
+            "rate_limit": client.rate_limit_hits,
+        }
+
+    runs: list[dict[str, float]] = []
     failed = False
+    plan = None
     budget = None
-    try:
-        plan, _, budget = build_plan(
-            pack,
-            client,
-            slide_count,
-            spec=spec,
-            max_bullets=cfg.audit.max_bullets_per_slide,
-            max_words_per_bullet=cfg.audit.max_words_per_bullet,
-            substitution_slack=cfg.fonts.substitution_slack,
+
+    for attempt in range(1, args.repeats + 1):
+        before = _counters()
+        started = time.monotonic()
+        try:
+            plan, _, budget = build_plan(
+                pack,
+                client,
+                slide_count,
+                spec=spec,
+                max_bullets=cfg.audit.max_bullets_per_slide,
+                max_words_per_bullet=cfg.audit.max_words_per_bullet,
+                substitution_slack=cfg.fonts.substitution_slack,
+            )
+        except Exception as exc:  # диагностика обязана досказать, что произошло
+            failed = True
+            print(f"ОШИБКА на прогоне {attempt}: {exc}", file=sys.stderr)
+            # Дальше не идём: если запрос ломается, остальные прогоны
+            # потратят деньги на тот же отказ.
+            break
+        elapsed = time.monotonic() - started
+        after = _counters()
+        runs.append(
+            {
+                "n": attempt,
+                "seconds": elapsed,
+                **{key: after[key] - before[key] for key in before},
+            }
         )
-    except Exception as exc:  # диагностика обязана досказать, что произошло
-        failed = True
-        print(f"ОШИБКА: {exc}", file=sys.stderr)
-        plan = None
-    elapsed = round(time.monotonic() - started, 2)
 
     if budget is not None:
         print(
@@ -193,8 +225,38 @@ def _cmd_probe(args: argparse.Namespace) -> int:
             f"пункт {budget.bullet_chars} симв; мерили: {budget.measured_with}"
         )
 
-    print(f"время           : {elapsed} с")
-    print(f"вызовов         : {client.calls}")
+    if runs:
+        print(f"\nпрогонов        : {len(runs)} из {args.repeats}")
+        print(
+            "  №   время, с   выход, ток   ток/с   повторов   <think>   429"
+        )
+        for run in runs:
+            speed = run["completion"] / run["seconds"] if run["seconds"] else 0.0
+            print(
+                f"  {int(run['n']):<3} {run['seconds']:>8.1f}   {int(run['completion']):>10}"
+                f"   {speed:>5.1f}   {int(run['retries']):>8}   {int(run['thinking']):>7}"
+                f"   {int(run['rate_limit']):>3}"
+            )
+
+        times = sorted(run["seconds"] for run in runs)
+        speeds = sorted(
+            run["completion"] / run["seconds"] if run["seconds"] else 0.0 for run in runs
+        )
+        print(
+            f"\nвремя, с        : мин {times[0]:.1f}  медиана {median(times):.1f}  "
+            f"макс {times[-1]:.1f}"
+        )
+        print(
+            f"скорость, ток/с : мин {speeds[0]:.1f}  медиана {median(speeds):.1f}  "
+            f"макс {speeds[-1]:.1f}"
+        )
+        # Разброс важнее среднего: если максимум вдесятеро больше минимума,
+        # планировать бюджет по медиане нельзя. На долях секунды отношение
+        # считать бессмысленно — там шумит сам замер.
+        if times[0] >= 1.0:
+            print(f"разброс         : макс/мин = {times[-1] / times[0]:.1f}×")
+
+    print(f"\nвызовов         : {client.calls}")
     print(f"повторов        : {client.retries}  (ответ не прошёл валидацию по схеме)")
     print(f"блоков <think>  : {client.thinking_blocks}")
     print(f"отброшено полей : {sorted(client.dropped_params) or 'нет'}")
@@ -211,11 +273,17 @@ def _cmd_probe(args: argparse.Namespace) -> int:
     price_in = args.price_in if args.price_in is not None else cfg.llm.price_per_1m_input
     price_out = args.price_out if args.price_out is not None else cfg.llm.price_per_1m_output
     if price_in or price_out:
-        cost = (
+        total = (
             client.prompt_tokens * price_in + client.completion_tokens * price_out
         ) / 1_000_000
-        print(f"стоимость       : ${cost:.6f} за вызов (${price_in}/${price_out} за 1M)")
-        print(f"  три шаблона   : ${cost * 3:.4f}  (планирование по разу на шаблон)")
+        per_call = total / client.calls if client.calls else 0.0
+        print(
+            f"стоимость       : ${per_call:.6f} за вызов, ${total:.6f} за пробу "
+            f"(${price_in}/${price_out} за 1M)"
+        )
+        print(
+            f"  три шаблона   : ${per_call * 3:.4f}  (планирование по разу на шаблон)"
+        )
     else:
         print("стоимость       : цены не заданы ни в конфиге, ни аргументами")
 
@@ -270,6 +338,15 @@ def main(argv: list[str] | None = None) -> int:
     probe.add_argument("--config", default=str(DEFAULT_CONFIG), help="Путь к config.yaml.")
     probe.add_argument("--content", required=True, help="Контент-пакет в JSON.")
     probe.add_argument("--save", default=None, help="Куда сохранить полученный план.")
+    probe.add_argument(
+        "--repeats",
+        type=int,
+        default=3,
+        help=(
+            "Сколько раз подряд прогнать планировщик. Один замер ничего не "
+            "говорит: скорость у провайдера плавает."
+        ),
+    )
     probe.add_argument(
         "--template",
         default=None,
