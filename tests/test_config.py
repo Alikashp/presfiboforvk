@@ -61,3 +61,37 @@ def test_step_params_fall_back_for_unknown_step(cfg):
 def test_unknown_variant_reports_known_ones(cfg):
     with pytest.raises(KeyError, match="dense"):
         cfg.variant("no-such-variant")
+
+
+def test_image_pass_covers_what_text_cannot(cfg):
+    """Картиночный проход обязателен и непуст.
+
+    Текст SlideIR показывает намерение, а не результат: обрезанный краем
+    слайда текст, наложившиеся блоки и подставленный не тот элемент в нём не
+    видны вовсе. ТЗ задаёт картинку слайда входом для валидации контента.
+    """
+    audit = cfg.audit
+    by_image = audit.checks_by_mode("image")
+    assert by_image, "ни одна контекстная проверка не идёт по картинке"
+    assert "content.body_matches_title" in by_image
+    assert "content.visuals_on_topic" in by_image
+    assert "content.no_prompt_leftovers" in by_image
+
+
+def test_moving_every_check_to_text_is_rejected():
+    """Конфиг, отключающий картинку целиком, не должен грузиться."""
+    from pydantic import ValidationError
+
+    from deckwright.config import AuditConfig
+
+    with pytest.raises(ValidationError, match="картиночный проход обязателен"):
+        AuditConfig(contextual_checks={"content.no_typos": "text"})
+
+
+def test_unknown_check_mode_is_rejected():
+    from pydantic import ValidationError
+
+    from deckwright.config import AuditConfig
+
+    with pytest.raises(ValidationError, match="image или text"):
+        AuditConfig(contextual_checks={"content.no_typos": "vlm"})

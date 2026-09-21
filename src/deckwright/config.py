@@ -141,11 +141,47 @@ class AuditConfig(BaseModel):
     contextual_dpi: int = Field(default=96, gt=0)
     skip_unchanged_slides: bool = True
     text_checks_once_per_deck: bool = True
+    # {идентификатор проверки: "image" | "text"}. Пустой словарь означает,
+    # что все контекстные проверки идут по картинке — более дорогой, но
+    # заведомо корректный вариант.
+    contextual_checks: dict[str, str] = Field(default_factory=dict)
+
+    def checks_by_mode(self, mode: str) -> list[str]:
+        """Идентификаторы проверок, идущих указанным способом."""
+        return sorted(check for check, how in self.contextual_checks.items() if how == mode)
 
     @model_validator(mode="after")
     def _check_fill(self) -> AuditConfig:
         if self.min_fill_ratio >= self.max_fill_ratio:
             raise ValueError("min_fill_ratio должен быть меньше max_fill_ratio")
+        return self
+
+    @model_validator(mode="after")
+    def _modes_are_known(self) -> AuditConfig:
+        unknown = {
+            check: how for check, how in self.contextual_checks.items()
+            if how not in ("image", "text")
+        }
+        if unknown:
+            raise ValueError(
+                f"способ проверки бывает только image или text, получено: {unknown}"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _image_pass_is_not_empty(self) -> AuditConfig:
+        """Хотя бы один вопрос обязан идти по картинке.
+
+        ТЗ задаёт картинку слайда входом для валидации контента. Колода,
+        проверенная только по тексту, не проверена: текст показывает
+        намерение, а не то, что получилось на слайде.
+        """
+        configured = self.contextual_enabled and self.contextual_checks
+        if configured and not any(how == "image" for how in self.contextual_checks.values()):
+            raise ValueError(
+                "все контекстные проверки переведены на текст: "
+                "картиночный проход обязателен"
+            )
         return self
 
 
