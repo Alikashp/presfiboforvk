@@ -81,7 +81,10 @@ def _cmd_run(args: argparse.Namespace) -> int:
         )
         manifest = result.manifest
         stages = ", ".join(f"{t.stage} {t.seconds}с" for t in manifest.timings)
-        print(f"[{variant}] {result.pptx.name}: {len(result.deck.slides)} слайдов")
+        print(
+            f"[{variant}] {result.pptx.name}: {len(result.deck.slides)} слайдов, "
+            f"{len(result.pages)} страниц PDF, {result.html.name}"
+        )
         print(f"[{variant}] {stages}")
         print(f"[{variant}] всего {manifest.total_seconds}с из {cfg.run.time_budget_seconds}с")
         for warning in manifest.warnings:

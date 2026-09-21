@@ -21,6 +21,7 @@ from deckwright.layout.text_metrics import metrics_for_spec
 from deckwright.llm.base import StructuredClient
 from deckwright.parse.opener import parse_template
 from deckwright.plan.planner import build_plan
+from deckwright.render.html import export_html
 from deckwright.render.package_check import check_package
 from deckwright.render.pdf import pptx_to_pdf
 from deckwright.render.png import pdf_to_png
@@ -48,6 +49,7 @@ class PipelineResult:
         layout_issues: list,
         pptx: Path,
         pdf: Path,
+        html: Path,
         pages: list[Path],
         manifest: RunManifest,
     ) -> None:
@@ -57,6 +59,7 @@ class PipelineResult:
         self.layout_issues = layout_issues
         self.pptx = pptx
         self.pdf = pdf
+        self.html = html
         self.pages = pages
         self.manifest = manifest
 
@@ -206,10 +209,28 @@ def run_variant(
     with _timed(manifest, "render_png"):
         pages = pdf_to_png(pdf_path, output_dir / "png", dpi=cfg.render.png_dpi)
 
+    with _timed(manifest, "render_html"):
+        html_path = export_html(
+            deck,
+            output_dir / f"{stem}.html",
+            spec=spec,
+            pptx_path=pptx_path,
+            title=plan.title,
+        )
+
+    # Число страниц PDF обязано совпадать с числом слайдов: расхождение значит,
+    # что конвертация потеряла или удвоила слайд, и заметить это можно только
+    # сравнением.
+    if len(pages) != len(deck.slides):
+        manifest.warnings.append(
+            f"страниц в PDF {len(pages)}, а слайдов в колоде {len(deck.slides)}"
+        )
+
     manifest.finished_at = datetime.now(UTC)
     manifest.artifacts = {
         "pptx": str(pptx_path),
         "pdf": str(pdf_path),
+        "html": str(html_path),
         "png_dir": str(output_dir / "png"),
     }
     if not manifest.within_budget(cfg.run.time_budget_seconds):
@@ -222,5 +243,13 @@ def run_variant(
         manifest.model_dump_json(indent=2), encoding="utf-8"
     )
     return PipelineResult(
-        spec, plan, deck, layout_issues, pptx_path, pdf_path, pages, manifest
+        spec,
+        plan,
+        deck,
+        layout_issues,
+        pptx_path,
+        pdf_path,
+        html_path,
+        pages,
+        manifest,
     )
