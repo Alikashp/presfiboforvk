@@ -168,6 +168,48 @@ class Pattern(BaseModel):
         repeated = sum(r.observed_count * len(r.item_slots) for r in self.repeaters)
         return fixed + repeated
 
+    @property
+    def capacity_range(self) -> tuple[int, int]:
+        """Сколько единиц вмещает при наименьшей и наибольшей раскладке.
+
+        Повторитель раздвигается: сетка из четырёх карточек принимает и три,
+        и пять. Вёрстке нужны границы, а не единственное наблюдённое число.
+        """
+        fixed = sum(1 for s in self.slots if s.role is not SlotRole.DECOR)
+        low = fixed + sum(r.min_count * len(r.item_slots) for r in self.repeaters)
+        high = fixed + sum(r.max_count * len(r.item_slots) for r in self.repeaters)
+        return low, high
+
+    @property
+    def slot_profile(self) -> dict[SlotRole, int]:
+        """Сколько мест какой роли даёт паттерн, с учётом повторителей.
+
+        Это **структурный** портрет композиции, не зависящий от того, удалось
+        ли её классифицировать. По нему вёрстка подбирает паттерн под слайд и
+        тогда, когда `pattern_class` равен `FREEFORM`: неопознанная композиция
+        остаётся пригодной, если у неё есть нужные места.
+        """
+        profile: dict[SlotRole, int] = {}
+        for slot in self.slots:
+            if slot.role is SlotRole.DECOR:
+                continue
+            profile[slot.role] = profile.get(slot.role, 0) + 1
+        for repeater in self.repeaters:
+            for slot in repeater.item_slots:
+                if slot.role is SlotRole.DECOR:
+                    continue
+                profile[slot.role] = profile.get(slot.role, 0) + repeater.max_count
+        return profile
+
+    def fits(self, needed: dict[SlotRole, int]) -> bool:
+        """Хватает ли паттерну мест под запрошенные роли.
+
+        Проверка идёт по структуре и ничего не знает о классе. Это и есть
+        запасной путь для композиций, которые правила не опознали.
+        """
+        profile = self.slot_profile
+        return all(profile.get(role, 0) >= count for role, count in needed.items())
+
 
 class ColorToken(BaseModel):
     """Цвет палитры с весом: чем больше площади он красит, тем он главнее."""
@@ -274,6 +316,33 @@ class TemplateSpec(BaseModel):
 
     def patterns_of(self, pattern_class: PatternClass) -> list[Pattern]:
         return [p for p in self.patterns if p.pattern_class is pattern_class]
+
+    def patterns_matching(
+        self,
+        needed: dict[SlotRole, int],
+        preferred: PatternClass | None = None,
+    ) -> list[Pattern]:
+        """Паттерны, куда помещается запрошенный набор мест.
+
+        Сначала по структуре, и только потом по классу. Опознанный класс
+        поднимает паттерн в выдаче, но неопознанный не исключает его: класс —
+        подсказка, а не пропуск.
+
+        Иначе шаблон, композиции которого не подошли ни под одно правило, терял
+        бы большинство своих макетов — а именно так выглядит произвольный чужой
+        шаблон, ради которого всё и делается. На `vk_education` правила не
+        опознают около двенадцати процентов композиций; выбрасывать их значит
+        добровольно обеднить вёрстку на восьмую часть.
+        """
+        candidates = [pattern for pattern in self.patterns if pattern.fits(needed)]
+
+        def rank(pattern: Pattern) -> tuple[int, float, int]:
+            class_match = 0 if (preferred and pattern.pattern_class is preferred) else 1
+            # Композиция, в классе которой парсер уверен, предпочтительнее
+            # неопознанной — но обе остаются в выдаче.
+            return (class_match, -pattern.provenance.confidence, pattern.capacity)
+
+        return sorted(candidates, key=rank)
 
     @model_validator(mode="after")
     def _patterns_point_at_real_layouts(self) -> TemplateSpec:

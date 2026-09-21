@@ -77,6 +77,19 @@ def _theme_root(prs: PresentationObject) -> etree._Element | None:
     return None
 
 
+def _theme_font_roles(theme: etree._Element | None) -> dict[str, str]:
+    """{major|minor: гарнитура} — для разрешения ссылок `+mj-lt` / `+mn-lt`."""
+    if theme is None:
+        return {}
+    roles: dict[str, str] = {}
+    for role, key in (("majorFont", "major"), ("minorFont", "minor")):
+        latin = theme.find(f".//{{{A_NS}}}{role}/{{{A_NS}}}latin")
+        typeface = latin.get("typeface") if latin is not None else None
+        if typeface:
+            roles[key] = typeface
+    return roles
+
+
 def _theme_families(theme: etree._Element | None) -> list[str]:
     if theme is None:
         return []
@@ -144,6 +157,7 @@ def _parse(path: Path, font_dir: Path | None) -> TemplateSpec:
     slide_w, slide_h = prs.slide_width, prs.slide_height
     theme_root = _theme_root(prs)
     theme = tokens_mod.theme_colors(theme_root)
+    theme_fonts = _theme_font_roles(theme_root)
     warnings: list[str] = []
 
     # ── Статистика по слайдам, layout'ам и мастерам ──────────────────────────
@@ -160,6 +174,7 @@ def _parse(path: Path, font_dir: Path | None) -> TemplateSpec:
             slide_h,
             usage,
             on_slide=False,
+            theme_fonts=theme_fonts,
         )
     primary_map = (
         tokens_mod.color_map(prs.slide_masters[0]._element) if len(prs.slide_masters) else {}
@@ -171,6 +186,7 @@ def _parse(path: Path, font_dir: Path | None) -> TemplateSpec:
         slide_w,
         slide_h,
         usage,
+        theme_fonts=theme_fonts,
     )
 
     palette = tokens_mod.build_palette(usage, theme)
@@ -220,13 +236,30 @@ def _parse(path: Path, font_dir: Path | None) -> TemplateSpec:
             master._element.find(f".//{{{P_NS}}}bg"), theme, clr_map
         ) if master._element.find(f".//{{{P_NS}}}bg") is not None else None
 
+        master_tree = _shape_tree(master._element)
+        master_backdrop = (
+            tokens_mod.backdrop_color(master_tree, slide_w, slide_h, theme, clr_map)
+            if master_tree is not None
+            else None
+        )
+
         for l_index, layout in enumerate(master.slide_layouts):
             bg_node = layout._element.find(f".//{{{P_NS}}}bg")
+            layout_tree = _shape_tree(layout._element)
             background = (
-                tokens_mod.resolve_color(bg_node, theme, clr_map)
-                if bg_node is not None
-                else None
-            ) or master_bg
+                (
+                    tokens_mod.resolve_color(bg_node, theme, clr_map)
+                    if bg_node is not None
+                    else None
+                )
+                or (
+                    tokens_mod.backdrop_color(layout_tree, slide_w, slide_h, theme, clr_map)
+                    if layout_tree is not None
+                    else None
+                )
+                or master_bg
+                or master_backdrop
+            )
             dark = background is not None and background.luminance < 0.5
             fallback = Color(rgb="FFFFFF") if dark else Color(rgb="111111")
             layout_id = f"{master_id}/layout{l_index + 1}"
@@ -253,15 +286,24 @@ def _parse(path: Path, font_dir: Path | None) -> TemplateSpec:
         )
 
     # ── Паттерны со слайдов-примеров ─────────────────────────────────────────
+    by_layout_id = {layout.id: layout for layout in layouts}
     patterns = []
     for index, slide in enumerate(prs.slides, start=1):
+        layout_id = layout_ids.get(id(slide.slide_layout._element))
+        # Фон слайда может перекрывать фон layout'а собственной подложкой.
+        own_backdrop = tokens_mod.backdrop_color(
+            slide.shapes._spTree, slide_w, slide_h, theme, primary_map
+        )
+        inherited = by_layout_id.get(layout_id).background if layout_id in by_layout_id else None
+        effective = own_backdrop or inherited
         pattern = mine_slide(
             slide.shapes._spTree,
             index,
             slide_w,
             slide_h,
-            layout_ids.get(id(slide.slide_layout._element)),
+            layout_id,
             base_style,
+            is_dark=effective is not None and effective.luminance < 0.5,
         )
         if pattern is not None:
             patterns.append(classified(pattern, slide_w, slide_h))

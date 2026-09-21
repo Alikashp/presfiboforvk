@@ -28,6 +28,7 @@ from lxml import etree
 from deckwright.schemas import Box
 
 A_NS = "http://schemas.openxmlformats.org/drawingml/2006/main"
+P_NS = "http://schemas.openxmlformats.org/presentationml/2006/main"
 
 # Угол в OOXML задан в шестидесятитысячных долях градуса.
 ANGLE_UNITS_PER_DEGREE = 60_000
@@ -70,6 +71,19 @@ class Transform:
 IDENTITY = Transform(offset_x=0, offset_y=0, scale_x=1.0, scale_y=1.0, child_x=0, child_y=0)
 
 
+def _xfrm(element: etree._Element) -> etree._Element | None:
+    """Блок геометрии фигуры.
+
+    Обычные фигуры держат его в `a:xfrm`, а `graphicFrame` — в `p:xfrm`,
+    в другом пространстве имён. Поиск только по `a:` делает все нативные
+    графики и таблицы невидимыми: они молча теряют геометрию и выпадают из
+    разбора. В датасете нативных графиков нет вовсе, поэтому ошибка
+    обнаружилась только на чужом шаблоне.
+    """
+    found = element.find(f".//{{{A_NS}}}xfrm")
+    return found if found is not None else element.find(f".//{{{P_NS}}}xfrm")
+
+
 def _int(element: etree._Element | None, name: str, default: int = 0) -> int:
     if element is None:
         return default
@@ -82,7 +96,7 @@ def _int(element: etree._Element | None, name: str, default: int = 0) -> int:
 
 def group_transform(group_element: etree._Element) -> Transform:
     """Читает `a:xfrm` группы. Без него дети остаются в своих координатах."""
-    xfrm = group_element.find(f".//{{{A_NS}}}xfrm")
+    xfrm = _xfrm(group_element)
     if xfrm is None:
         return IDENTITY
 
@@ -119,7 +133,7 @@ def shape_box(element: etree._Element, transform: Transform = IDENTITY) -> Box |
     разрешать это наследование здесь нельзя, поэтому возвращается None, и
     вызывающий решает, откуда взять геометрию.
     """
-    xfrm = element.find(f".//{{{A_NS}}}xfrm")
+    xfrm = _xfrm(element)
     if xfrm is None:
         return None
     off, ext = xfrm.find(f"{{{A_NS}}}off"), xfrm.find(f"{{{A_NS}}}ext")

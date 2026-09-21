@@ -124,6 +124,46 @@ def resolve_color(
     return None
 
 
+def backdrop_color(
+    container: etree._Element,
+    slide_w: int,
+    slide_h: int,
+    theme: dict[str, str],
+    clr_map: dict[str, str],
+) -> Color | None:
+    """Цвет фоновой подложки — фигуры, закрывающей почти весь слайд.
+
+    Фон объявляют двумя способами: элементом `p:bg` или просто прямоугольником
+    во весь слайд. Второй способ распространён не меньше первого, а в `p:bg`
+    при этом не попадает ничего.
+
+    Разница не косметическая. От того, тёмный фон или светлый, зависит цвет
+    текста; шаблон, у которого фон нарисован фигурой, при проверке только
+    `p:bg` считается светлым, и по чёрному фону пишется чёрным. Ровно это
+    вскрыл синтетический тёмный holdout: `vk_workspace` из датасета объявляет
+    фон через `p:bg`, и дыра не была видна.
+    """
+    slide_area = slide_w * slide_h
+    best: tuple[int, Color] | None = None
+    for element, box, _ in iter_shapes(container):
+        if box is None:
+            continue
+        covers = box.w >= slide_w * 0.9 and box.h >= slide_h * 0.9
+        if not covers:
+            continue
+        fill = element.find(f".//{{{A_NS}}}solidFill")
+        if fill is None:
+            continue
+        color = resolve_color(fill, theme, clr_map)
+        if color is None:
+            continue
+        # Из нескольких подложек берём самую крупную: она внизу стопки и
+        # задаёт общий тон.
+        if best is None or box.area > best[0]:
+            best = (min(box.area, slide_area), color)
+    return best[1] if best else None
+
+
 def _collect_colors(
     element: etree._Element,
     box: Box | None,
@@ -152,12 +192,36 @@ def _collect_colors(
         usage.colors[key] += area if role == ROLE_FILL else 0
 
 
-def _collect_typography(element: etree._Element, usage: Usage, on_slide: bool) -> None:
+# Ссылки на шрифты темы. Текст, набранный ими, не называет гарнитуру прямо.
+THEME_FONT_REFS = {"+mj-lt": "major", "+mn-lt": "minor", "+mj-ea": "major", "+mn-ea": "minor"}
+
+
+def _collect_typography(
+    element: etree._Element,
+    usage: Usage,
+    on_slide: bool,
+    theme_fonts: dict[str, str] | None = None,
+) -> None:
+    """Считает гарнитуры, разрешая ссылки на шрифты темы.
+
+    Шаблон может не называть гарнитуру ни разу: весь текст ссылается на тему
+    через `+mn-lt`, и тогда тема — единственный источник правды. Это зеркало
+    случая с датасетом, где тема, наоборот, лгала. Без разрешения ссылок у
+    такого шаблона гарнитуры оказываются с нулевым употреблением, и выбрать
+    между ними не по чему.
+    """
     counter = usage.fonts if on_slide else usage.fonts_declared
+    theme_fonts = theme_fonts or {}
     for latin in element.findall(f".//{{{A_NS}}}latin"):
         family = latin.get("typeface")
-        if family and not family.startswith("+"):
-            counter[family] += 1
+        if not family:
+            continue
+        if family.startswith("+"):
+            resolved = theme_fonts.get(THEME_FONT_REFS.get(family, ""))
+            if resolved:
+                counter[resolved] += 1
+            continue
+        counter[family] += 1
     for node in element.iter():
         tag = etree.QName(node).localname
         if tag in ("rPr", "defRPr") and node.get("sz"):
@@ -208,6 +272,7 @@ def collect(
     slide_h: int,
     usage: Usage | None = None,
     on_slide: bool = True,
+    theme_fonts: dict[str, str] | None = None,
 ) -> Usage:
     """Обходит деревья фигур и накапливает статистику.
 
@@ -218,7 +283,7 @@ def collect(
     for container in containers:
         for element, box, _ in iter_shapes(container):
             _collect_colors(element, box, usage, theme, clr_map)
-            _collect_typography(element, usage, on_slide)
+            _collect_typography(element, usage, on_slide, theme_fonts)
             _collect_edges(element, box, slide_w, slide_h, usage)
     return usage
 

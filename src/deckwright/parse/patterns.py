@@ -52,6 +52,14 @@ MIN_REPEAT = 2
 # из четырёх карточек; три и пять в ту же полосу укладываются, десять — нет.
 COUNT_SLACK = 2
 
+# Тип содержимого `graphicFrame` объявлен в `graphicData/@uri`. В датасете
+# нативных графиков не было вовсе, и рамка считалась таблицей всегда; на чужом
+# шаблоне с четырьмя графиками это подменяло график таблицей.
+GRAPHIC_ROLES = {
+    "chart": SlotRole.CHART,
+    "table": SlotRole.TABLE,
+}
+
 # Фигура мельче этой доли слайда по обеим сторонам — маркер или точка, а не
 # содержательное место.
 MIN_SLOT_AREA_SHARE = 0.0004
@@ -118,7 +126,11 @@ def _role_from_geometry(shape: _Shape, shapes: list[_Shape], slide_h: int) -> Sl
     if shape.tag == "pic":
         return SlotRole.IMAGE
     if shape.tag == "graphicFrame":
-        return SlotRole.TABLE
+        data = shape.element.find(f".//{{{A_NS}}}graphicData")
+        uri = (data.get("uri", "") if data is not None else "").rsplit("/", 1)[-1]
+        # Неизвестный вид рамки (SmartArt, встроенный объект) честнее пометить
+        # неопознанным, чем назвать таблицей и потом строить не то.
+        return GRAPHIC_ROLES.get(uri, SlotRole.UNKNOWN)
     if not shape.text:
         return SlotRole.DECOR
 
@@ -362,6 +374,7 @@ def mine_slide(
     slide_h: int,
     layout_id: str | None,
     default_style: TextStyle,
+    is_dark: bool = False,
 ) -> Pattern | None:
     """Разбирает слайд-пример в композиционный паттерн."""
     shapes = _collect(container, slide_w, slide_h)
@@ -409,6 +422,7 @@ def mine_slide(
         slots=slots,
         repeaters=repeaters,
         content_area=content_area,
+        is_dark=is_dark,
         provenance=Provenance(
             kind=SourceKind.SLIDE,
             ref=f"slide{slide_index}",
