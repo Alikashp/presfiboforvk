@@ -134,5 +134,32 @@ audit:
   skip_unchanged_slides: true
   # Проверки, отвечаемые по тексту SlideIR, не зависят от варианта вёрстки:
   # содержание у трёх вариантов одно. Спрашивать их один раз на колоду, а не
-  # трижды, и без картинки — она для них не нужна.
+  # трижды.
   text_checks_once_per_deck: true
+
+  # Способ проверки для каждого контекстного вопроса Приложения 1 ТЗ.
+  #
+  #   image — вопрос идёт по картинке слайда, по одному разу на вариант;
+  #   text  — по тексту SlideIR, один раз на колоду.
+  #
+  # Картиночный проход обязателен и сокращению не подлежит: ТЗ задаёт
+  # картинку слайда входом для валидации контента, а текст SlideIR показывает
+  # намерение, а не результат. Обрезанный краем слайда текст, наложившиеся
+  # блоки, подставленный не тот элемент — всё это в тексте не видно вовсе.
+  # Экономим на разрешении и на пропуске неизменённых слайдов, но не на
+  # отказе от картинки.
+  #
+  # По тексту оставлены вопросы, где картинка не добавляет ничего: опечатки,
+  # единый язык, происхождение чисел, связность соседних слайдов.
+  contextual_checks:
+    content.body_matches_title:      image
+    content.has_content:             image
+    content.visuals_on_topic:        image
+    content.no_prompt_leftovers:     image
+    content.table_rows_serve_point:  image
+    content.title_is_takeaway:       text
+    content.one_sentence_summary:    text
+    content.figures_in_sources:      text
+    content.no_typos:                text
+    content.single_language:         text
+    content.slides_connected:        text
