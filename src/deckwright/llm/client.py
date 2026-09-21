@@ -36,6 +36,11 @@ from pydantic import BaseModel, ValidationError
 
 from deckwright.config import ModelConfig
 from deckwright.llm.base import StructuredError
+from deckwright.llm.ratelimit import (
+    RateLimiter,
+    estimate_image_tokens,
+    estimate_text_tokens,
+)
 from deckwright.llm.response import has_reasoning, strip_wrapping
 
 T = TypeVar("T", bound=BaseModel)
@@ -89,6 +94,16 @@ def probe_endpoint(cfg: ModelConfig) -> tuple[bool, str, list[str]]:
     return True, "принят", sorted(models)
 
 
+def _png_size(data: bytes) -> tuple[int, int]:
+    """Размер PNG из заголовка. Неразборчивый файл — консервативная оценка."""
+    if len(data) >= 24 and data[:8] == b"\x89PNG\r\n\x1a\n":
+        return (
+            int.from_bytes(data[16:20], "big"),
+            int.from_bytes(data[20:24], "big"),
+        )
+    return 1920, 1080
+
+
 def _short(exc: Exception) -> str:
     text = str(exc).strip().replace("\n", " ")
     return text[:160]
@@ -121,6 +136,10 @@ class LiveClient:
         # Ответы 429. SDK сам повторяет их с выдержкой; счётчик нужен, чтобы
         # было видно, упёрлись ли мы в лимит провайдера, а не гадать по времени.
         self.rate_limit_hits = 0
+        self.limiter = RateLimiter(
+            tokens_per_minute=cfg.tokens_per_minute,
+            requests_per_minute=cfg.requests_per_minute,
+        )
         # Последний сырой ответ: нужен диагностике `deckwright probe`, чтобы
         # показать, что именно вернул endpoint, а не пересказ.
         self.last_raw = ""
@@ -150,8 +169,31 @@ class LiveClient:
             )
         return [{"role": "user", "content": content}]
 
-    def _ask(self, step: str, messages: list[dict]) -> str:
+    def _estimate(self, step: str, messages: list[dict], images: list[bytes] | None) -> int:
+        """Сколько токенов запрос займёт — до того, как он ушёл.
+
+        Нужно ограничителю: место в минутном окне занимается заранее, иначе
+        восемь параллельных вызовов уйдут одновременно и пробьют лимит. После
+        ответа оценка заменяется фактом из `usage`.
+        """
+        text = "".join(
+            part.get("text", "") if isinstance(part, dict) else str(part)
+            for message in messages
+            for part in (
+                message["content"]
+                if isinstance(message["content"], list)
+                else [{"text": message["content"]}]
+            )
+        )
+        tokens = estimate_text_tokens(text) + self._cfg.step(step).max_tokens
+        for image in images or ():
+            width, height = _png_size(image)
+            tokens += estimate_image_tokens(width, height)
+        return tokens
+
+    def _ask(self, step: str, messages: list[dict], estimated: int = 0) -> str:
         params = self._cfg.step(step)
+        entry = self.limiter.acquire(estimated) if self.limiter.enabled else None
         try:
             response = self._client.chat.completions.create(
                 model=self._cfg.model,
@@ -181,9 +223,13 @@ class LiveClient:
             )
         self.calls += 1
         usage = getattr(response, "usage", None)
+        actual = 0
         if usage is not None:
             self.prompt_tokens += getattr(usage, "prompt_tokens", 0) or 0
             self.completion_tokens += getattr(usage, "completion_tokens", 0) or 0
+            actual = getattr(usage, "total_tokens", 0) or 0
+        if entry is not None and actual:
+            self.limiter.settle(entry, actual)
 
         content = response.choices[0].message.content or ""
         # Некоторые провайдеры кладут рассуждения в отдельное поле, некоторые
@@ -210,9 +256,10 @@ class LiveClient:
         images: list[bytes] | None = None,
     ) -> T:
         messages = self._message(prompt, schema, images)
+        estimated = self._estimate(step, messages, images)
         last_error = ""
         for _ in range(self._cfg.max_retries + 1):
-            raw = self._ask(step, messages)
+            raw = self._ask(step, messages, estimated)
             try:
                 return schema.model_validate_json(strip_wrapping(raw))
             except ValidationError as exc:
