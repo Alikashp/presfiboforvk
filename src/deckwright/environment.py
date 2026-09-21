@@ -8,7 +8,10 @@
 * poppler (``pdftoppm``) — без него нет PNG, а значит нет превью и нет
   контекстного аудита по картинке слайда;
 * libeot — без него не распаковываются встроенные в шаблон шрифты, и рендер,
-  PDF и измерение текста расходятся с тем, что задумал дизайнер.
+  PDF и измерение текста расходятся с тем, что задумал дизайнер;
+* метрически совместимые клоны проприетарных шрифтов — без них шаблон на
+  Calibri меряется по DejaVu, ширины расходятся, и бюджет длины уходит
+  мимо.
 
 Проверяются они здесь, одним вызовом, и на этапе сборки образа — чтобы
 отсутствие вскрывалось до первого прогона, а не посреди него.
@@ -85,10 +88,45 @@ def check_fallback_fonts() -> Check:
     return Check("шрифты", True, f"{len(found)} .ttf, например {found[0].name}")
 
 
+def check_metric_clones() -> Check:
+    """Есть ли в образе свободные клоны проприетарных шрифтов.
+
+    Они не про внешний вид, а про ширины. Carlito повторяет метрики Calibri,
+    Caladea — Cambria, Liberation — Arial, Times New Roman и Courier New:
+    текст переносится на тех же местах, что и у человека с оригиналом, и
+    бюджет длины считается по правильным ширинам. Без них подставляется
+    DejaVu, и измерение врёт.
+
+    Само имя шрифта в `.pptx` при этом не меняется никогда — клоны живут
+    только внутри контейнера.
+    """
+    from deckwright.layout.text_metrics import METRIC_CLONES, _find_font_file
+
+    missing = sorted(
+        {
+            files[0]
+            for files in METRIC_CLONES.values()
+            if _find_font_file(files) is None
+        }
+    )
+    if missing:
+        return Check(
+            "метрические клоны",
+            False,
+            "нет в образе: " + ", ".join(missing),
+        )
+    return Check(
+        "метрические клоны",
+        True,
+        f"на месте, {len(METRIC_CLONES)} гарнитур покрыто",
+    )
+
+
 def run_checks(soffice_binary: str = "soffice") -> list[Check]:
     return [
         check_soffice(soffice_binary),
         check_pdftoppm(),
         check_libeot(),
         check_fallback_fonts(),
+        check_metric_clones(),
     ]

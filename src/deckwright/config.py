@@ -120,6 +120,10 @@ class DeckConfig(BaseModel):
 class FontsConfig(BaseModel):
     extract_dir: Path = Path(".cache/fonts")
     allow_substitution: bool = True
+    # Во сколько раз ужимать бюджет длины, когда текст меряли шрифтом с
+    # другими ширинами. Метрически совместимый клон запаса не требует: у
+    # Carlito те же ширины, что у Calibri, и строки переносятся там же.
+    substitution_slack: float = Field(default=0.8, gt=0, le=1)
 
 
 class RenderConfig(BaseModel):

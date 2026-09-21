@@ -15,11 +15,13 @@
 * layout'ы вообще есть;
 * цвета и гарнитуры видны на слайдах;
 * слайдов-примеров много;
-* шрифты встроены.
+* шрифт шаблона есть в системе, и встроенную копию можно распаковать.
 """
 
 from __future__ import annotations
 
+import shutil
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -46,6 +48,11 @@ class Variant:
     # Ничего не красить и не набирать на слайдах: цвет и гарнитура остаются
     # только в теме. Зеркало датасета, где тема, наоборот, лгала.
     blank_slides: bool = False
+    # Вшить в шаблон нераспаковываемую копию шрифта. Проверяет две вещи
+    # разом: парсер не обязан падать, когда `.fntdata` ему не поддаётся,
+    # а сборщик обязан донести эти части до результата — иначе у человека
+    # без нужного шрифта колода откроется не тем.
+    embed_font: str = ""
 
 
 VARIANTS: tuple[Variant, ...] = (
@@ -74,6 +81,15 @@ VARIANTS: tuple[Variant, ...] = (
         breaks="один слайд-пример на всю колоду",
         example_slides=1,
         accent="0F766E",
+    ),
+    Variant(
+        name="embedded_font",
+        breaks="встроенный шрифт не распаковывается, а системного нет вовсе",
+        # Calibri в контейнере нет: измерение уйдёт на метрический клон
+        # Carlito. Имя шрифта в результате обязано остаться Calibri.
+        font="Calibri",
+        accent="1D4ED8",
+        embed_font="Calibri",
     ),
     Variant(
         name="theme_only",
@@ -145,7 +161,66 @@ def build(variant: Variant, path: str | Path) -> Path:
             item.font.color.rgb = RGBColor.from_string(variant.background)
 
     prs.save(str(path))
+    if variant.embed_font:
+        _embed_font(path, variant.embed_font)
     return path
+
+
+# Тип содержимого для `.fntdata` — тот же, что пишет сам PowerPoint.
+FNTDATA_CONTENT_TYPE = "application/x-fontdata"
+FNTDATA_REL_TYPE = (
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/font"
+)
+
+
+def _embed_font(path: Path, typeface: str) -> None:
+    """Дописывает в готовый `.pptx` встроенную копию шрифта.
+
+    Байты внутри — не настоящий EOT, и распаковать их нельзя. Так и надо:
+    проверяется не распаковка, а то, что части шрифта доезжают до
+    результирующей колоды в целости и объявлены в `presentation.xml`.
+    """
+    source = zipfile.ZipFile(path)
+    items = [(item, source.read(item.filename)) for item in source.infolist()]
+    source.close()
+
+    part = "ppt/fonts/font1.fntdata"
+    rel_id = "rIdEmbeddedFont1"
+    patched: list[tuple[str, bytes]] = []
+    for item, data in items:
+        text = None
+        if item.filename == "[Content_Types].xml":
+            text = data.decode("utf-8").replace(
+                "</Types>",
+                f'<Override PartName="/{part}" '
+                f'ContentType="{FNTDATA_CONTENT_TYPE}"/></Types>',
+            )
+        elif item.filename == "ppt/_rels/presentation.xml.rels":
+            text = data.decode("utf-8").replace(
+                "</Relationships>",
+                f'<Relationship Id="{rel_id}" Type="{FNTDATA_REL_TYPE}" '
+                'Target="fonts/font1.fntdata"/></Relationships>',
+            )
+        elif item.filename == "ppt/presentation.xml":
+            # Схема требует `embeddedFontLst` после `notesSz`.
+            text = data.decode("utf-8")
+            anchor = text.index("/>", text.index("<p:notesSz")) + 2
+            text = (
+                text[:anchor]
+                + "<p:embeddedFontLst><p:embeddedFont>"
+                + f'<p:font typeface="{typeface}" pitchFamily="34" charset="0"/>'
+                + f'<p:regular r:id="{rel_id}"/>'
+                + "</p:embeddedFont></p:embeddedFontLst>"
+                + text[anchor:]
+            )
+        patched.append((item.filename, text.encode("utf-8") if text else data))
+
+    tmp = path.with_suffix(".tmp")
+    with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as out:
+        for name, data in patched:
+            out.writestr(name, data)
+        out.writestr(part, b"deckwright-embedded-font-fixture")
+    shutil.move(str(tmp), str(path))
 
 
 def build_all(target_dir: str | Path) -> list[Path]:

@@ -20,7 +20,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from statistics import median
 
-from deckwright.layout.text_metrics import FontMetrics, characters_that_fit, metrics_for_spec
+from deckwright.layout.text_metrics import (
+    MeasurementSource,
+    characters_that_fit,
+    metrics_for_spec,
+)
 from deckwright.schemas import Box, SlotRole, TemplateSpec
 
 # Запас от края рамки: писать в упор нельзя, иначе любая неточность измерения
@@ -46,8 +50,9 @@ class LengthBudget:
     bullet_chars: int
     max_bullets: int
     max_words_per_bullet: int
-    # Чем мерили: шрифтом шаблона или подстановкой. Идёт в манифест.
+    # Чем мерили: шрифтом шаблона, метрическим клоном или чужой гарнитурой.
     measured_with: str
+    metric_compatible: bool = True
 
     def as_prompt_lines(self) -> str:
         """Ограничения в том виде, в каком они уходят в промпт."""
@@ -165,19 +170,24 @@ def compute_budget(
     spec: TemplateSpec,
     max_bullets: int,
     max_words_per_bullet: int,
-    metrics: FontMetrics | None = None,
-    measured_with: str = "",
+    source: MeasurementSource | None = None,
+    substitution_slack: float = 0.8,
 ) -> LengthBudget:
     """Бюджеты длины для этого шаблона.
 
-    Без метрик шрифта измерить нечего, и тогда возвращаются только пороги
-    плотности из ТЗ, а длины остаются нулевыми — промпт тогда о них не
-    упоминает вовсе, вместо того чтобы называть выдуманное число.
+    Запас на подстановку применяется **только** к шрифту с другими ширинами.
+    Метрический клон в запасе не нуждается: у Carlito те же ширины, что у
+    Calibri, и текст переносится там же, где у человека с оригиналом. Ужимать
+    бюджет в таком случае значит без причины требовать от модели более
+    коротких формулировок.
     """
+    source = source or metrics_for_spec(spec)
+    metrics, measured_with = source.metrics, source.description
     if metrics is None:
-        metrics, measured_with = metrics_for_spec(spec)
-    if metrics is None:
-        return LengthBudget(0, 0, 0, max_bullets, max_words_per_bullet, measured_with)
+        return LengthBudget(
+            0, 0, 0, max_bullets, max_words_per_bullet, measured_with, False
+        )
+    slack = 1.0 if source.metric_compatible else substitution_slack
 
     width, height = spec.slide_width_emu, spec.slide_height_emu
     title_box = _median_box(
@@ -217,6 +227,9 @@ def compute_budget(
         _demonstrated_length(spec, SlotRole.BODY) * max_bullets,
     )
 
+    title_chars = round(title_chars * slack)
+    body_chars = round(body_chars * slack)
+
     return LengthBudget(
         title_chars=max(20, title_chars),
         # Подзаголовок живёт в той же рамке, но мельче и короче заголовка.
@@ -226,4 +239,5 @@ def compute_budget(
         max_bullets=max_bullets,
         max_words_per_bullet=max_words_per_bullet,
         measured_with=measured_with,
+        metric_compatible=source.metric_compatible,
     )

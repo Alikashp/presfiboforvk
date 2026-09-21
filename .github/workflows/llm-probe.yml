@@ -88,8 +88,13 @@ jobs:
           if [ -n "$PRICE_IN" ] && [ -n "$PRICE_OUT" ]; then
             ARGS="--price-in $PRICE_IN --price-out $PRICE_OUT"
           fi
+          # Шаблон обязателен: без него в промпт не уйдут ограничения
+          # длины, и проба проверит не тот промпт, который работает в
+          # настоящем прогоне.
+          python tests/fixtures/make_template.py probe-templates/synthetic.pptx
           deckwright probe \
             --content tests/fixtures/content_pack.json \
+            --template probe-templates/synthetic.pptx \
             --save probe-out/plan_deck.json \
             $ARGS
 

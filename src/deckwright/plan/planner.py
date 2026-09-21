@@ -91,6 +91,7 @@ def build_plan(
     spec: TemplateSpec | None = None,
     max_bullets: int = 6,
     max_words_per_bullet: int = 15,
+    substitution_slack: float = 0.8,
     prompts_dir: str | Path | None = None,
 ) -> tuple[DeckPlan, Prompt, LengthBudget | None]:
     """План, использованный промпт и бюджеты длины.
@@ -102,7 +103,11 @@ def build_plan(
     """
     prompt = load_prompt("plan_deck.v2", prompts_dir)
     budget = (
-        compute_budget(spec, max_bullets, max_words_per_bullet) if spec is not None else None
+        compute_budget(
+            spec, max_bullets, max_words_per_bullet, substitution_slack=substitution_slack
+        )
+        if spec is not None
+        else None
     )
     limits = (
         budget.as_prompt_lines()
