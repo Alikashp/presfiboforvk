@@ -175,7 +175,7 @@ def run_variant(
             preset = cfg.variant(variant)
         except KeyError:
             preset = variant
-        deck, layout_issues = build_deck_ir(spec, plan, preset)
+        deck, layout_issues = build_deck_ir(spec, plan, preset, pack=pack)
     # Находки вёрстки о самой себе едут дальше вместе с колодой: текст, не
     # влезший на минимальной ступени шкалы, обязан быть виден, а не обрезан
     # молча.

@@ -23,6 +23,8 @@ from deckwright.layout.strategy import Strategy, ladder_for_role
 from deckwright.layout.text_metrics import FontMetrics, metrics_for_spec
 from deckwright.schemas import (
     Box,
+    ChartContent,
+    ChartKind,
     CheckKind,
     Color,
     DeckIR,
@@ -42,10 +44,12 @@ from deckwright.schemas import (
     SlidePlan,
     SlotRole,
     SourceKind,
+    TableContent,
     TemplateSpec,
     TextContent,
     TextStyle,
 )
+from deckwright.visuals.charts import series_from_pack
 
 # Намерения, которым хватает одного заголовка.
 _BARE_INTENTS = frozenset({SlideIntent.TITLE, SlideIntent.SECTION, SlideIntent.CLOSING})
@@ -323,6 +327,13 @@ def _assign(slots: list, role: SlotRole, taken: list[Box] | None = None) -> obje
 # вёрстка не имеет права выдавать то, что он справедливо забракует.
 MIN_CONTRAST = 4.5
 
+# Высота строки таблицы в кеглях и сколько символов кегля нужно колонке, чтобы
+# в неё влезло хоть что-то. Оценка грубая и намеренно такая: точную ширину
+# колонок считает PowerPoint, а здесь решается только «влезет или переехать».
+TABLE_ROW_HEIGHT = 1.8
+TABLE_MIN_CHARS = 6
+EMU_PER_POINT = 12_700
+
 
 def _text_color(
     container, role: SlotRole, is_dark: bool, background: Color | None
@@ -420,6 +431,137 @@ def _free_band(
     return Box(x=area.x, y=top, w=area.w, h=max(1, remaining // share))
 
 
+def _data_element(
+    element_id: str,
+    block,
+    role: SlotRole,
+    box: Box,
+    style: TextStyle,
+    spec: TemplateSpec,
+    pack,
+    background: Color | None,
+    is_dark: bool,
+    roomy: Box,
+) -> Element | None:
+    """Блок плана как нативный график или таблица, если это возможно.
+
+    Возвращает None, когда данных не хватает: ряда нет в пакете, категории
+    рядов не сошлись, таблица пуста. Тогда блок верстается текстом — это хуже
+    графика, но честнее пустой рамки.
+
+    Растр здесь невозможен по построению: и `c:chart`, и `a:tbl` — нативные
+    объекты, которые человек может открыть и поправить.
+    """
+    palette = _visible_palette(spec, background, is_dark)
+
+    if role is SlotRole.CHART and block.series_ids and pack is not None:
+        categories, series = series_from_pack(block.series_ids, pack, palette)
+        if categories and series:
+            return Element(
+                id=element_id,
+                kind=ElementKind.CHART,
+                role=SlotRole.CHART,
+                box=box,
+                provenance=Provenance(kind=SourceKind.DERIVED, ref=block.id),
+                chart=ChartContent(
+                    chart_kind=ChartKind.COLUMN if len(categories) > 2 else ChartKind.BAR,
+                    categories=categories,
+                    series=series,
+                    has_legend=len(series) > 1,
+                    label_style=style,
+                ),
+            )
+
+    if role is SlotRole.TABLE:
+        table = _table_content(block, pack, style)
+        if table is not None:
+            return Element(
+                id=element_id,
+                kind=ElementKind.TABLE,
+                role=SlotRole.TABLE,
+                box=_table_box(table, style, box, roomy),
+                provenance=Provenance(kind=SourceKind.DERIVED, ref=block.id),
+                table=table,
+            )
+    return None
+
+
+def _table_box(table: TableContent, style: TextStyle, slot: Box, roomy: Box) -> Box:
+    """Рамка, в которую таблица действительно помещается.
+
+    Слот композиции бывает подписью в одну строку, а таблице нужно столько
+    строк, сколько в ней данных. Втиснутая в подпись таблица не ужимается —
+    она растёт вниз и уезжает за слайд, а колонки сжимаются до одной буквы в
+    строке. Поэтому высота считается заранее, и если слот её не держит,
+    таблица переезжает в свободную область.
+
+    Ширина смотрится так же: колонке нужно место хотя бы под пару символов
+    кегля, которым её набирают.
+    """
+    rows = len(table.rows) + 1
+    needed_h = round(rows * style.size_pt * TABLE_ROW_HEIGHT * EMU_PER_POINT)
+    needed_w = round(len(table.header) * style.size_pt * TABLE_MIN_CHARS * EMU_PER_POINT)
+    if slot.h >= needed_h and slot.w >= needed_w:
+        return slot
+    return Box(
+        x=roomy.x,
+        y=roomy.y,
+        w=max(roomy.w, needed_w) if roomy.w >= needed_w else roomy.w,
+        h=min(roomy.h, max(needed_h, roomy.h)) if needed_h <= roomy.h else roomy.h,
+    )
+
+
+def _visible_palette(
+    spec: TemplateSpec, background: Color | None, is_dark: bool
+) -> list[Color]:
+    """Цвета шаблона, которые видно на его же фоне.
+
+    Первый цвет палитры — самый употребительный по площади, а на тёмном
+    шаблоне это фон. Покрасить им столбики значит нарисовать чёрное по
+    чёрному: график есть, данные верные, видно ничего. Та же ошибка, что и с
+    текстом, и тот же порог из Приложения 1.
+    """
+    colors = [token.color for token in spec.palette]
+    if background is not None:
+        colors = [
+            color
+            for color in colors
+            if color.contrast_ratio(background) >= MIN_CONTRAST
+        ]
+    if colors:
+        return colors
+    return [Color(rgb="FFFFFF") if is_dark else Color(rgb="111111")]
+
+
+def _table_content(block, pack, style: TextStyle) -> TableContent | None:
+    """Таблица блока: своя, если планировщик её составил, иначе из рядов."""
+    if block.table is not None and block.table.columns:
+        return TableContent(
+            header=list(block.table.columns),
+            rows=[list(row) for row in block.table.rows],
+            header_style=style,
+            cell_style=style,
+        )
+
+    known = {item.id: item for item in getattr(pack, "series", [])} if pack else {}
+    chosen = [known[sid] for sid in block.series_ids if sid in known]
+    if not chosen:
+        return None
+    categories = chosen[0].categories
+    chosen = [item for item in chosen if item.categories == categories]
+    if not chosen:
+        return None
+    return TableContent(
+        header=["", *[item.name for item in chosen]],
+        rows=[
+            [label, *[f"{item.values[row]:g}" for item in chosen]]
+            for row, label in enumerate(categories)
+        ],
+        header_style=style,
+        cell_style=style,
+    )
+
+
 def _block_lines(block) -> list[str]:
     """Блок плана, приведённый к строкам для текстовой рамки."""
     lines: list[str] = []
@@ -476,6 +618,7 @@ def build_slide_ir(
     ladders: dict[SlotRole, list[float]],
     font_family: str,
     used: set[str] | None = None,
+    pack=None,
 ) -> tuple[SlideIR, list[Issue]]:
     """Один слайд: композиция шаблона, заполненная содержанием плана."""
     pattern = pick_pattern(
@@ -609,6 +752,26 @@ def build_slide_ir(
             color=_text_color(container, role, is_dark, background),
         )
         taken.append(box)
+
+        # Числовой ряд и таблица становятся нативными объектами, а не
+        # пересказом строками: ТЗ засчитывает только `c:chart` и `a:tbl`, и
+        # человек должен мочь открыть данные и поправить их.
+        native = _data_element(
+            element_id,
+            block,
+            role,
+            box,
+            style,
+            spec,
+            pack,
+            background,
+            is_dark,
+            _content_area(spec, container),
+        )
+        if native is not None:
+            elements.append(native)
+            continue
+
         elements.append(
             Element(
                 id=element_id,
@@ -639,7 +802,11 @@ def build_slide_ir(
 
 
 def build_deck_ir(
-    spec: TemplateSpec, plan, variant, strategy: Strategy | None = None
+    spec: TemplateSpec,
+    plan,
+    variant,
+    strategy: Strategy | None = None,
+    pack=None,
 ) -> tuple[DeckIR, list[Issue]]:
     """Колода одного варианта и находки, которые вёрстка завела о себе сама.
 
@@ -672,7 +839,7 @@ def build_deck_ir(
     used: set[str] = set()
     for plan_slide in plan.slides:
         built, found = _slides_for(
-            spec, plan_slide, strategy, metrics, ladders, font_family, used
+            spec, plan_slide, strategy, metrics, ladders, font_family, used, pack
         )
         slides.extend(built)
         issues.extend(found)
@@ -702,6 +869,7 @@ def _slides_for(
     ladders: dict[SlotRole, list[float]],
     font_family: str,
     used: set[str],
+    pack=None,
 ) -> tuple[list[SlideIR], list[Issue]]:
     """Слайд, а если он переполнен и деление помогает — два.
 
@@ -717,7 +885,7 @@ def _slides_for(
     шесть наложений на колоду.
     """
     slide, issues = build_slide_ir(
-        spec, plan_slide, strategy, metrics, ladders, font_family, used
+        spec, plan_slide, strategy, metrics, ladders, font_family, used, pack
     )
 
     # Переполнение заголовка делением не лечится: у обеих половин заголовок
@@ -751,6 +919,7 @@ def _slides_for(
             ladders,
             font_family,
             used | {slide.pattern_id or ""},
+            pack,
         )
         # Идентификаторы элементов обязаны остаться уникальными в колоде.
         for element in built.all_elements():
