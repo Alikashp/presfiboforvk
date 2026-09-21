@@ -654,12 +654,16 @@ def build_slide_ir(
     title_start = strategy.start_size(title_ladder, title_declared)
     title_id = f"s{plan_slide.index}_title"
 
+    title_overflowed = False
+    title_steps = 0
     if metrics is not None:
         fit = fit_size(
             plan_slide.takeaway_title, metrics, title_box, title_ladder, title_start
         )
         title_size = fit.size_pt
-        if not fit.fits:
+        title_steps = fit.steps_down
+        title_overflowed = not fit.fits
+        if title_overflowed:
             issues.append(
                 _overflow_issue(plan_slide.index, title_id, title_box, fit, "заголовок")
             )
@@ -674,6 +678,8 @@ def build_slide_ir(
             box=title_box,
             provenance=provenance,
             text=TextContent(
+                scale_steps_down=title_steps,
+                truncated=title_overflowed,
                 paragraphs=[
                     Paragraph(
                         text=plan_slide.takeaway_title,
@@ -734,10 +740,14 @@ def build_slide_ir(
         start = strategy.start_size(block_ladder, declared)
         element_id = f"s{plan_slide.index}_b{position}"
 
+        overflowed = False
+        steps_down = 0
         if metrics is not None:
             fit = fit_paragraphs(lines, metrics, box, block_ladder, start)
             size = fit.size_pt
-            if not fit.fits:
+            steps_down = fit.steps_down
+            overflowed = not fit.fits
+            if overflowed:
                 issues.append(
                     _overflow_issue(
                         plan_slide.index, element_id, box, fit, f"блок {block.id!r}"
@@ -783,7 +793,12 @@ def build_slide_ir(
                     paragraphs=[
                         Paragraph(text=line, style=style, bullet=len(lines) > 1)
                         for line in lines
-                    ]
+                    ],
+                    # Переполнение записывается в само представление, а не
+                    # только в находки вёрстки: аудит читает IR и обязан
+                    # видеть то же, что видел фиттер.
+                    scale_steps_down=steps_down,
+                    truncated=overflowed,
                 ),
             )
         )

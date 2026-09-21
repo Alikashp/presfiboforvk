@@ -15,6 +15,7 @@ from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 
+from deckwright.audit.report import audit_deck
 from deckwright.config import Config
 from deckwright.layout.matcher import build_deck_ir
 from deckwright.layout.text_metrics import metrics_for_spec
@@ -47,6 +48,7 @@ class PipelineResult:
         plan: DeckPlan,
         deck: DeckIR,
         layout_issues: list,
+        audit: object,
         pptx: Path,
         pdf: Path,
         html: Path,
@@ -57,6 +59,7 @@ class PipelineResult:
         self.plan = plan
         self.deck = deck
         self.layout_issues = layout_issues
+        self.audit = audit
         self.pptx = pptx
         self.pdf = pdf
         self.html = html
@@ -83,8 +86,15 @@ def run_variant(
     variant: str,
     output_dir: str | Path,
     run_id: str | None = None,
+    vlm_client: StructuredClient | None = None,
 ) -> PipelineResult:
-    """Прогоняет один вариант вёрстки от шаблона до картинок слайдов."""
+    """Прогоняет один вариант вёрстки от шаблона до аудита.
+
+    `vlm_client` отдельный от `client`: контекстные проверки идут в модель со
+    зрением, а планирование — в текстовую. Без него выполняются только
+    детерминированные проверки, и невыполненные честно перечисляются в
+    `skipped_checks` отчёта.
+    """
     template_path = Path(template_path)
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -226,11 +236,27 @@ def run_variant(
             f"страниц в PDF {len(pages)}, а слайдов в колоде {len(deck.slides)}"
         )
 
+    with _timed(manifest, "audit"):
+        report = audit_deck(
+            deck,
+            spec,
+            plan,
+            pack,
+            cfg,
+            pptx_path=pptx_path,
+            pages=pages,
+            client=vlm_client,
+        )
+        (output_dir / f"{stem}.audit.json").write_text(
+            report.model_dump_json(indent=2), encoding="utf-8"
+        )
+
     manifest.finished_at = datetime.now(UTC)
     manifest.artifacts = {
         "pptx": str(pptx_path),
         "pdf": str(pdf_path),
         "html": str(html_path),
+        "audit": str(output_dir / f"{stem}.audit.json"),
         "png_dir": str(output_dir / "png"),
     }
     if not manifest.within_budget(cfg.run.time_budget_seconds):
@@ -247,6 +273,7 @@ def run_variant(
         plan,
         deck,
         layout_issues,
+        report,
         pptx_path,
         pdf_path,
         html_path,
