@@ -29,8 +29,11 @@ from deckwright.schemas.deck_plan import (
     BlockKind,
     ContentBlock,
     DeckPlan,
+    Figure,
+    FigureKind,
     SlideIntent,
     SlidePlan,
+    TableData,
 )
 from deckwright.schemas.issue import (
     AuditReport,
@@ -98,6 +101,8 @@ __all__ = [
     "Element",
     "ElementKind",
     "Fact",
+    "Figure",
+    "FigureKind",
     "FixKind",
     "FontSubstitution",
     "FontToken",
@@ -130,6 +135,7 @@ __all__ = [
     "SourceKind",
     "StageTiming",
     "TableContent",
+    "TableData",
     "TemplateSpec",
     "TextContent",
     "TextStyle",
