@@ -158,3 +158,17 @@ def test_ci_installs_the_same_system_packages_as_the_image():
         f"в образе есть, в CI нет: {sorted(missing)}. deckwright doctor идёт в "
         "обоих местах и проверяет одно и то же — списки обязаны совпадать"
     )
+
+
+def test_audit_probe_always_runs_against_a_spoiled_deck():
+    """Главный вопрос прогона — различает ли аудит плохое и хорошее.
+
+    Без `--spoil` прогон меряет токены и время, но не отвечает на него:
+    аудит, который всегда доволен, укладывается в любой бюджет и бесполезен.
+    """
+    workflow = (
+        Path(__file__).resolve().parents[1] / ".github" / "workflows" / "llm-probe.yml"
+    ).read_text("utf-8")
+    assert "audit-probe" in workflow, "режим живого аудита не заведён в workflow"
+    audit_step = workflow[workflow.index("deckwright audit-probe") :]
+    assert "--spoil" in audit_step[:600], "живой аудит запускается без испорченной колоды"

@@ -306,6 +306,155 @@ def _cmd_probe(args: argparse.Namespace) -> int:
     return 1 if failed else 0
 
 
+def _cmd_audit_probe(args: argparse.Namespace) -> int:
+    """Живой прогон контекстного аудита: замер вместо оценки.
+
+    Колода собирается по записанным ответам — платить за планирование, чтобы
+    проверить аудит, незачем. Живой остаётся только та часть, которую и надо
+    измерить: вопросы по картинке слайда.
+    """
+    import json as _json
+    import time as _time
+
+    from deckwright.audit import probe as audit_probe
+    from deckwright.audit.spoil import spoil
+    from deckwright.llm.client import LiveClient, probe_endpoint
+    from deckwright.pipeline import run_variant
+    from deckwright.render.pdf import pptx_to_pdf
+    from deckwright.render.png import pdf_to_png
+    from deckwright.render.pptx_writer import render_deck
+
+    cfg = load_config(args.config)
+    model = cfg.vlm if cfg.vlm.configured else cfg.llm
+    if not model.configured:
+        print(
+            "Модель со зрением не настроена: заполните VLM_BASE_URL, VLM_API_KEY "
+            "и VLM_MODEL (или LLM_*) в .env — см. .env.example.",
+            file=sys.stderr,
+        )
+        return 1
+
+    print(f"endpoint : {model.base_url}")
+    print(f"модель   : {model.model}")
+    reachable, detail, available = probe_endpoint(model)
+    print(f"ключ     : {detail}")
+    if available:
+        print(f"моделей  : {len(available)}")
+        print(
+            f"модель   : {model.model} — "
+            + ("доступна" if model.model in available else "В СПИСКЕ НЕТ")
+        )
+    if not reachable:
+        print("\nEndpoint не принял ключ: см. подсказки в `deckwright probe`.", file=sys.stderr)
+        return 1
+
+    pack = ContentPack.model_validate(
+        _json.loads(Path(args.content).read_text(encoding="utf-8"))
+    )
+    output = Path(args.output)
+    print("\nсобираю колоду по записанным ответам…")
+    built = run_variant(
+        template_path=args.template,
+        pack=pack,
+        cfg=cfg,
+        client=RecordedClient(args.recorded),
+        variant=args.variant,
+        output_dir=output / "clean",
+    )
+    print(f"  слайдов {len(built.deck.slides)}, картинок {len(built.pages)}")
+
+    check_ids = cfg.audit.checks_by_mode("image")
+    client = LiveClient(model)
+
+    started = _time.monotonic()
+    clean = audit_probe.run(
+        client,
+        built.deck,
+        built.plan,
+        built.pages,
+        check_ids,
+        limit=args.slides,
+        measure_cost=True,
+    )
+
+    # Шесть вопросов из одиннадцати задаются по тексту колоды, а не по
+    # картинке. Не спросить их значит померить меньше половины аудита.
+    text_ids = cfg.audit.checks_by_mode("text")
+    if text_ids:
+        clean.deck_pass = audit_probe.run_text_pass(client, built.plan, text_ids)
+
+    spoiled_result = None
+    damage = []
+    if args.spoil:
+        print("\nсобираю заведомо испорченную колоду…")
+        broken, damage = spoil(built.deck)
+        broken_pptx = render_deck(
+            broken, built.spec, args.template, output / "spoiled" / "spoiled.pptx"
+        )
+        broken_pdf = pptx_to_pdf(
+            broken_pptx,
+            output / "spoiled",
+            soffice_binary=cfg.render.soffice_binary,
+            timeout_seconds=cfg.render.soffice_timeout_seconds,
+        )
+        broken_pages = pdf_to_png(
+            broken_pdf, output / "spoiled" / "png", dpi=cfg.render.png_dpi
+        )
+        print(f"  порч внесено: {len(damage)}")
+        spoiled_result = audit_probe.run(
+            client,
+            broken,
+            built.plan,
+            broken_pages,
+            check_ids,
+            limit=max(item.slide_index for item in damage) if damage else args.slides,
+            measure_cost=False,
+        )
+
+    print()
+    print(
+        audit_probe.format_report(
+            clean,
+            spoiled_result,
+            damage,
+            check_ids,
+            cfg.audit.contextual_dpi,
+            text_ids,
+        )
+    )
+    print()
+    print(f"весь прогон          : {_time.monotonic() - started:.1f} с")
+    print(f"вызовов              : {client.calls}")
+    print(f"повторов             : {client.retries}")
+    print(f"блоков <think>       : {client.thinking_blocks}")
+    print(f"ответов 429          : {client.rate_limit_hits}")
+    print(f"отброшено полей      : {sorted(client.dropped_params) or 'нет'}")
+    cost = model.cost_usd(client.prompt_tokens, client.completion_tokens)
+    print(f"стоимость            : ${cost:.6f}")
+
+    if args.save:
+        Path(args.save).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.save).write_text(
+            _json.dumps(
+                {
+                    "dpi": cfg.audit.contextual_dpi,
+                    "image_token_cost": clean.image_token_cost,
+                    "slides": [vars(s) for s in clean.slides],
+                    "spoiled": [vars(s) for s in (spoiled_result.slides if spoiled_result else [])],
+                    "damage": [vars(d) for d in damage],
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        print(f"замеры сохранены     : {args.save}")
+
+    if any(slide.error for slide in clean.slides):
+        return 1
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="deckwright",
@@ -362,6 +511,38 @@ def main(argv: list[str] | None = None) -> int:
         "--price-out", type=float, default=None, help="Цена за 1M выходных токенов."
     )
     probe.set_defaults(func=_cmd_probe)
+
+    audit = sub.add_parser(
+        "audit-probe",
+        help="Живой прогон контекстного аудита: токены, время, формат, чувствительность.",
+    )
+    audit.add_argument("--config", default=str(DEFAULT_CONFIG), help="Путь к config.yaml.")
+    audit.add_argument("--template", required=True, help="Шаблон .pptx.")
+    audit.add_argument("--content", required=True, help="Контент-пакет в JSON.")
+    audit.add_argument(
+        "--recorded",
+        default="tests/fixtures/recorded",
+        help="Записанные ответы для планирования: платить за него незачем.",
+    )
+    audit.add_argument("--variant", default="balanced", help="Вариант вёрстки.")
+    audit.add_argument("--output", default="outputs/audit-probe", help="Куда класть колоды.")
+    audit.add_argument(
+        "--slides",
+        type=int,
+        default=0,
+        help="Сколько слайдов спросить. 0 — всю колоду.",
+    )
+    audit.add_argument(
+        "--spoil",
+        action="store_true",
+        help=(
+            "Прогнать ещё и по заведомо испорченной колоде. Аудит, который "
+            "всегда доволен, проходит все тесты и бесполезен."
+        ),
+    )
+    audit.add_argument("--save", default=None, help="Куда сохранить замеры в JSON.")
+    audit.set_defaults(func=_cmd_audit_probe)
+
 
     args = parser.parse_args(argv)
     return args.func(args)
