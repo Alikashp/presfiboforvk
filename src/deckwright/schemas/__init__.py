@@ -79,6 +79,7 @@ from deckwright.schemas.template_spec import (
     Slot,
     SlotRole,
     TemplateSpec,
+    readable_text_color,
 )
 
 __all__ = [
@@ -144,4 +145,5 @@ __all__ = [
     "TextContent",
     "TextStyle",
     "VAlign",
+    "readable_text_color",
 ]
