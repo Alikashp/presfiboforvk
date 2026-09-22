@@ -37,7 +37,7 @@ def audit_deck(
     """
     issues = []
     issues.extend(geometry.run(deck, spec))
-    issues.extend(template_fidelity.run(deck, spec))
+    issues.extend(template_fidelity.run(deck, spec, cfg.audit.contrast_min_ratio))
     issues.extend(
         content_checks.run(
             deck,
@@ -46,7 +46,7 @@ def audit_deck(
             pptx_path,
             max_bullets=cfg.audit.max_bullets_per_slide,
             max_words=cfg.audit.max_words_per_bullet,
-            min_fill=getattr(cfg.audit, "min_fill_ratio", content_checks.MIN_FILL_RATIO),
+            min_fill=cfg.audit.min_fill_ratio,
         )
     )
 

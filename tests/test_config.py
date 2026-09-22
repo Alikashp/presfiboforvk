@@ -95,3 +95,66 @@ def test_unknown_check_mode_is_rejected():
 
     with pytest.raises(ValidationError, match="image или text"):
         AuditConfig(contextual_checks={"content.no_typos": "vlm"})
+
+
+# ── Конфиг не имеет права обещать поведение, которого нет ────────────────────
+#
+# Это случилось четырежды подряд, и каждый раз выглядело одинаково: ключ в
+# `config.yaml` есть, комментарий объясняет, что он делает, а в коде его никто
+# не читает — либо читает под другим именем. Цена — впустую потраченное время
+# на «почему настройка не действует».
+#
+#   audit_context / layout_semantics  — параметры шагов под именами, которых
+#                                       код не зовёт (он зовёт audit_slide и
+#                                       audit_deck);
+#   ModelUsage.steps                  — поле манифеста, всегда пустое;
+#   text_checks_once_per_deck         — флаг стоял true, текстовый проход шёл
+#                                       на каждый вариант;
+#   contrast_min_ratio                — порог в конфиге, а в проверке
+#                                       захардкоженная константа.
+#
+# Лечится двумя правилами: незнакомый ключ роняет загрузку (extra="forbid"), а
+# знакомый, но никем не читаемый, роняет этот тест.
+
+
+def _config_fields(model, prefix: str = "") -> list[tuple[str, str]]:
+    """Все поля конфига с путями: ('audit.contrast_min_ratio', 'contrast_min_ratio')."""
+    from pydantic import BaseModel
+
+    found: list[tuple[str, str]] = []
+    for name, info in model.model_fields.items():
+        found.append((f"{prefix}{name}", name))
+        annotation = info.annotation
+        for candidate in (annotation, *getattr(annotation, "__args__", ())):
+            if isinstance(candidate, type) and issubclass(candidate, BaseModel):
+                found.extend(_config_fields(candidate, f"{prefix}{name}."))
+    return found
+
+
+def test_every_config_key_is_read_by_someone():
+    """Ключ, которого никто не читает, — это обещание, которого нет."""
+    from deckwright.config import Config
+
+    source = "\n".join(
+        path.read_text("utf-8")
+        for path in (Path(__file__).resolve().parents[1] / "src" / "deckwright").rglob("*.py")
+    )
+    unused = [
+        path
+        for path, field in _config_fields(Config)
+        if f".{field}" not in source
+        and f'"{field}"' not in source
+        and f"'{field}'" not in source
+    ]
+    assert not unused, (
+        f"эти ключи конфига не читает никто: {unused}. Либо подключите их, "
+        "либо уберите: молчаливое умолчание выглядит как настройка"
+    )
+
+
+def test_unknown_config_key_is_a_loud_error():
+    """Опечатка в имени ключа не должна тихо откатываться к умолчанию."""
+    from deckwright.config import Config
+
+    with pytest.raises(Exception, match="max_fix_iteraions"):
+        Config.model_validate({"run": {"max_fix_iteraions": 3}})

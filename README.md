@@ -54,13 +54,23 @@ docker compose up --build
 
 ### Локально
 
-Нужны системные пакеты: `libreoffice-impress`, `poppler-utils`, `libeot-utils`.
-
 ```bash
 cp .env.example .env
+sh scripts/install-system-deps.sh   # системные пакеты: один список на все окружения
 pip install -e ".[dev]"
 streamlit run app/ui.py
 ```
+
+Список системных пакетов лежит в одном месте — `scripts/install-system-deps.sh`,
+— и его же зовут образ и CI. Держать его в трёх файлах значит однажды их
+разъехать: без `libreoffice-impress` один `libreoffice-core` отвечает на `.pptx`
+«source file could not be loaded», и это выглядит как поломка кода.
+
+Проверить окружение: `deckwright doctor`.
+
+Сессии Claude Code на вебе готовят окружение сами — `.claude/hooks/session-start.sh`
+ставит тот же список, зависимости проекта и собирает синтетические шаблоны для
+тестов. Если хук не подключён, то же самое делается руками командами выше.
 
 ## Переменные окружения
 

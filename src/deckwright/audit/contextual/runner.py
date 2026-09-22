@@ -239,7 +239,7 @@ def run(
     result = ContextualResult()
     audit = cfg.audit
 
-    if not getattr(audit, "contextual_enabled", True):
+    if not audit.contextual_enabled:
         for check_id in audit.checks_by_mode("image") + audit.checks_by_mode("text"):
             result.skipped[check_id] = "контекстные проверки выключены в конфиге"
         return result
@@ -257,7 +257,7 @@ def run(
             pages,
             client,
             image_ids,
-            getattr(cfg.vlm, "max_concurrent_calls", 8),
+            cfg.vlm.max_concurrent_calls,
             prompts_dir,
             only_slides,
         )
@@ -268,7 +268,7 @@ def run(
 
     text_ids = audit.checks_by_mode("text")
     if text_ids:
-        if text_findings is not None and getattr(audit, "text_checks_once_per_deck", True):
+        if text_findings is not None and audit.text_checks_once_per_deck:
             result.issues.extend(text_findings)
             result.text_reused = True
         else:

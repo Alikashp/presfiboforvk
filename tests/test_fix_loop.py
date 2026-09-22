@@ -348,3 +348,46 @@ def test_rewrite_applies_accepted_text():
     assert outcome.plan.slides[1].takeaway_title == "Выручка выросла на 34 %"
     # Исходный план не тронут: правка возвращается копией.
     assert plan.slides[1].takeaway_title == "Выручка выросла на 34 % за квартал"
+
+
+def test_second_audit_asks_only_about_changed_slides(damaged):
+    """Переспрашиваются только изменённые слайды, а не вся колода.
+
+    Это не экономия на спичках: вопрос по слайду — 15.9 с и 1866 токенов по
+    замеру, и полный переспрос после правки трёх слайдов стоил бы как первый
+    проход. Проверяется счётчиком вызовов, а не чтением кода.
+    """
+    stub, issue = damaged
+
+    class CountingVlm:
+        mocked = True
+
+        def __init__(self) -> None:
+            self.calls = 0
+            self.slide_questions = 0
+
+        def complete(self, step, prompt, schema, images=None):
+            self.calls += 1
+            if step == "audit_slide":
+                self.slide_questions += 1
+            return schema.model_validate({"answers": []})
+
+    vlm = CountingVlm()
+    stub.context.vlm_client = vlm
+    # Находки текстового прохода с первого варианта здесь не переезжают:
+    # меряем именно картиночный проход.
+    stub.context.text_findings = None
+
+    after = apply_selection(stub, {issue.key})
+
+    changed = {
+        index
+        for record in after.manifest.fix_iterations
+        for index in record.rechecked_slides
+    }
+    assert changed, "цикл не сообщил, какие слайды он изменил"
+    assert vlm.slide_questions == len(changed), (
+        f"вопросов по слайдам {vlm.slide_questions} при {len(changed)} изменённых "
+        f"(в колоде {len(after.deck.slides)}): переспрашивается вся колода"
+    )
+    assert vlm.slide_questions < len(after.deck.slides)

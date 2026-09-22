@@ -17,12 +17,14 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 _ENV_REF = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
 
 class StepParams(BaseModel):
+
+    model_config = ConfigDict(extra="forbid")
     """Параметры одного шага пайплайна при обращении к модели.
 
     ``enable_thinking`` и ``reasoning_effort`` поддерживаются не всеми
@@ -37,6 +39,8 @@ class StepParams(BaseModel):
 
 
 class ModelConfig(BaseModel):
+
+    model_config = ConfigDict(extra="forbid")
     base_url: str = ""
     api_key: str = ""
     model: str = ""
@@ -103,6 +107,8 @@ class ImageProviderConfig(ModelConfig):
 
 
 class RunConfig(BaseModel):
+
+    model_config = ConfigDict(extra="forbid")
     seed: int = 0
     output_dir: Path = Path("outputs")
     # Вход прогона. Заданные здесь, они делают запуск воспроизводимым одной
@@ -112,8 +118,7 @@ class RunConfig(BaseModel):
     template: Path | None = None
     content: Path | None = None
     time_budget_seconds: int = Field(default=300, gt=0)
-    slide_workers: int = Field(default=4, gt=0)
-    max_fix_iterations: int = Field(default=2, ge=0)
+    max_fix_iterations: int = Field(default=1, ge=0)
     # Что прогон делает с находками аудита сам.
     #
     #   review — остановиться с отчётом: выбирает пользователь (умолчание ТЗ);
@@ -131,10 +136,14 @@ class RunConfig(BaseModel):
 
 
 class TemplateConfig(BaseModel):
+
+    model_config = ConfigDict(extra="forbid")
     cache_dir: Path = Path(".cache/templates")
 
 
 class DeckConfig(BaseModel):
+
+    model_config = ConfigDict(extra="forbid")
     slide_count: int | None = None
     min_slides: int = Field(default=10, gt=0)
     max_slides: int = Field(default=15, gt=0)
@@ -156,8 +165,9 @@ class DeckConfig(BaseModel):
 
 
 class FontsConfig(BaseModel):
+
+    model_config = ConfigDict(extra="forbid")
     extract_dir: Path = Path(".cache/fonts")
-    allow_substitution: bool = True
     # Во сколько раз ужимать бюджет длины, когда текст меряли шрифтом с
     # другими ширинами. Метрически совместимый клон запаса не требует: у
     # Carlito те же ширины, что у Calibri, и строки переносятся там же.
@@ -165,18 +175,19 @@ class FontsConfig(BaseModel):
 
 
 class RenderConfig(BaseModel):
+
+    model_config = ConfigDict(extra="forbid")
     soffice_binary: str = "soffice"
     soffice_timeout_seconds: int = Field(default=180, gt=0)
     png_dpi: int = Field(default=96, gt=0)
 
 
 class AuditConfig(BaseModel):
+
+    model_config = ConfigDict(extra="forbid")
     contrast_min_ratio: float = Field(default=4.5, gt=0)
     max_bullets_per_slide: int = Field(default=6, gt=0)
     max_words_per_bullet: int = Field(default=15, gt=0)
-    max_table_rows: int = Field(default=7, gt=0)
-    max_table_cols: int = Field(default=5, gt=0)
-    max_chart_series: int = Field(default=5, gt=0)
     min_fill_ratio: float = Field(default=0.25, ge=0, le=1)
     max_fill_ratio: float = Field(default=0.75, ge=0, le=1)
     contextual_enabled: bool = True
@@ -228,6 +239,8 @@ class AuditConfig(BaseModel):
 
 
 class LayoutStrategy(BaseModel):
+
+    model_config = ConfigDict(extra="forbid")
     """Ось различий между тремя вариантами вёрстки.
 
     Не три ветки кода, а один параметр: пайплайн один, пресеты разные
@@ -242,12 +255,16 @@ class LayoutStrategy(BaseModel):
 
 
 class Variant(BaseModel):
+
+    model_config = ConfigDict(extra="forbid")
     name: str
     description: str = ""
     strategy: LayoutStrategy = Field(default_factory=LayoutStrategy)
 
 
 class Config(BaseModel):
+
+    model_config = ConfigDict(extra="forbid")
     run: RunConfig = Field(default_factory=RunConfig)
     template: TemplateConfig = Field(default_factory=TemplateConfig)
     deck: DeckConfig = Field(default_factory=DeckConfig)
