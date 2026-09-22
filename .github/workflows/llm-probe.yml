@@ -35,6 +35,14 @@ on:
         description: "Включить режим рассуждений (проверить, снимается ли блок <think>)"
         required: false
         default: "false"
+      audit:
+        description: "Вместо планирования прогнать живой аудит по картинкам слайдов"
+        required: false
+        default: "false"
+      audit_slides:
+        description: "Сколько слайдов спросить в аудите (0 — всю колоду)"
+        required: false
+        default: "4"
       full_run:
         description: "Прогнать всю колоду до .pptx, а не только планирование"
         required: false
@@ -76,7 +84,31 @@ jobs:
         env:
           ENABLE_THINKING: ${{ inputs.enable_thinking }}
 
+      - name: Живой аудит по картинкам слайдов
+        if: ${{ inputs.audit == 'true' }}
+        env:
+          LLM_BASE_URL: ${{ inputs.base_url }}
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          LLM_MODEL: ${{ inputs.model }}
+        run: |
+          if [ -z "$LLM_API_KEY" ]; then
+            echo "::error::Секрет LLM_API_KEY не задан."
+            exit 1
+          fi
+          python tests/fixtures/make_template.py probe-templates/synthetic.pptx
+          # --spoil обязателен: аудит, который всегда доволен, проходит все
+          # тесты и бесполезен. Без заведомо испорченной колоды прогон не
+          # отвечает на главный вопрос.
+          deckwright audit-probe \
+            --template probe-templates/synthetic.pptx \
+            --content tests/fixtures/content_pack.json \
+            --slides "${{ inputs.audit_slides }}" \
+            --spoil \
+            --output probe-out/audit \
+            --save probe-out/audit-probe.json
+
       - name: Диагностический вызов
+        if: ${{ inputs.audit != 'true' }}
         env:
           LLM_BASE_URL: ${{ inputs.base_url }}
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
@@ -107,7 +139,7 @@ jobs:
       # поэтому полученный план дублируется в лог: оттуда его можно взять как
       # настоящую фикстуру вместо рукописной.
       - name: Полученный план целиком
-        if: always()
+        if: ${{ always() && inputs.audit != 'true' }}
         run: |
           if [ -f probe-out/plan_deck.json ]; then
             echo "----- НАЧАЛО plan_deck.json -----"
