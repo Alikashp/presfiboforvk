@@ -62,24 +62,53 @@ def _make_client(cfg, recorded_dir: str | None) -> StructuredClient:
 
 def _cmd_run(args: argparse.Namespace) -> int:
     cfg = load_config(args.config)
+    # Шаблон и контент берутся из конфига, если не заданы аргументами: A22
+    # требует воспроизводимого запуска одной командой с конфиг-файлом.
+    template = args.template or cfg.run.template
+    content = args.content or cfg.run.content
+    missing = [
+        name
+        for name, value in (("--template", template), ("--content", content))
+        if value is None
+    ]
+    if missing:
+        print(
+            f"Не задано: {', '.join(missing)}. Укажите аргументами или пропишите "
+            f"run.template и run.content в {args.config}.",
+            file=sys.stderr,
+        )
+        return 2
+
     pack = ContentPack.model_validate(
-        json.loads(Path(args.content).read_text(encoding="utf-8"))
+        json.loads(Path(content).read_text(encoding="utf-8"))
     )
     client = _make_client(cfg, args.recorded)
 
     variants = [v.name for v in cfg.variants] if args.variant is None else [args.variant]
     output_root = Path(args.output or cfg.run.output_dir)
 
+    # План от варианта не зависит: три варианта раскладывают одно и то же
+    # содержание по-разному. Планируется он один раз и переиспользуется —
+    # иначе три одинаковых ответа модели стоят втрое дороже и втрое дольше
+    # (по замеру 34 с на вызов).
+    prepared = None
+    text_findings = None
     for variant in variants:
         result = run_variant(
-            template_path=args.template,
+            template_path=template,
             pack=pack,
             cfg=cfg,
             client=client,
             variant=variant,
             output_dir=output_root / variant,
             fix_mode=args.fix,
+            prepared=prepared,
+            text_findings=text_findings,
         )
+        prepared = result.prepared
+        # Вопросы текстового прохода аудита задаются по плану, а план один на
+        # три варианта: опечатки и единый язык от вёрстки не зависят.
+        text_findings = result.text_findings
         manifest = result.manifest
         stages = ", ".join(f"{t.stage} {t.seconds}с" for t in manifest.timings)
         print(
@@ -526,8 +555,14 @@ def main(argv: list[str] | None = None) -> int:
 
     run = sub.add_parser("run", help="Собрать презентацию по шаблону и контент-пакету.")
     run.add_argument("--config", default=str(DEFAULT_CONFIG), help="Путь к config.yaml.")
-    run.add_argument("--template", required=True, help="Шаблон .pptx.")
-    run.add_argument("--content", required=True, help="Контент-пакет в JSON.")
+    run.add_argument(
+        "--template", default=None, help="Шаблон .pptx; по умолчанию run.template из конфига."
+    )
+    run.add_argument(
+        "--content",
+        default=None,
+        help="Контент-пакет в JSON; по умолчанию run.content из конфига.",
+    )
     run.add_argument("--variant", default=None, help="Один вариант вместо всех из конфига.")
     run.add_argument("--output", default=None, help="Каталог артефактов.")
     run.add_argument(

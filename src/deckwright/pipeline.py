@@ -39,7 +39,7 @@ from deckwright.layout.text_metrics import metrics_for_spec
 from deckwright.llm.base import StructuredClient
 from deckwright.parse.opener import parse_template
 from deckwright.plan.budget import LengthBudget
-from deckwright.plan.planner import build_plan
+from deckwright.plan.planner import Prompt, build_plan
 from deckwright.render.html import export_html
 from deckwright.render.package_check import check_package
 from deckwright.render.pdf import pptx_to_pdf
@@ -78,6 +78,7 @@ class PipelineResult:
         pages: list[Path],
         manifest: RunManifest,
         context: _RunContext | None = None,
+        prepared: PreparedPlan | None = None,
     ) -> None:
         self.spec = spec
         self.plan = plan
@@ -93,11 +94,32 @@ class PipelineResult:
         # разбирая шаблон и не планируя заново. UI фазы 11 держит результат
         # между запросами и передаёт его обратно в `apply_selection`.
         self.context = context
+        # План для следующего варианта: он от варианта не зависит.
+        self.prepared = prepared
+
+    @property
+    def text_findings(self) -> list[Issue] | None:
+        """Находки текстового прохода — следующему варианту, а не заново."""
+        return self.context.text_findings if self.context is not None else None
 
     @property
     def report(self) -> AuditReport:
         """Синоним `audit`: отчёт называется отчётом в UI и в CLI."""
         return self.audit
+
+
+@dataclass
+class PreparedPlan:
+    """План и всё, чем он обоснован, — чтобы не планировать его трижды.
+
+    План не зависит от варианта вёрстки: варианты раскладывают одно и то же
+    содержание по-разному. Три вызова планировщика на три варианта — это три
+    одинаковых ответа за тройную цену: по замеру 34 с и $0.0054 каждый.
+    """
+
+    plan: DeckPlan
+    prompt: Prompt
+    budget: LengthBudget | None
 
 
 @dataclass
@@ -113,6 +135,9 @@ class _RunContext:
     preset: object
     budget: LengthBudget | None
     vlm_client: StructuredClient | None
+    # Находки текстового прохода: он идёт по плану, а план у вариантов один.
+    # Заполняется после первого аудита и переезжает в следующий вариант.
+    text_findings: list[Issue] | None = None
 
 
 def _step_params(model_cfg, steps: tuple[str, ...]) -> dict[str, dict[str, object]]:
@@ -211,7 +236,18 @@ def _build(
         )
 
     with _timed(manifest, "render_png"):
-        pages = pdf_to_png(pdf_path, output_dir / "png", dpi=cfg.render.png_dpi)
+        # Растеризация — самая дорогая часть пересборки (18 с из 20 на колоде
+        # holdout), а итерация цикла трогает два-три слайда. Перерисовываются
+        # только их страницы: остальные страницы нового `.pdf` побайтово те
+        # же, потому что вёрстка каждого слайда не зависит от соседей.
+        # Если число страниц изменилось, нумерация поехала — `pdf_to_png`
+        # сам возвращается к полной растеризации.
+        pages = pdf_to_png(
+            pdf_path,
+            output_dir / "png",
+            dpi=cfg.render.png_dpi,
+            only_pages=only_slides,
+        )
 
     with _timed(manifest, "render_html"):
         html_path = export_html(
@@ -241,8 +277,14 @@ def _build(
             pages=pages,
             client=ctx.vlm_client,
             only_slides=only_slides,
+            text_findings=ctx.text_findings,
         )
         report = _merge_contextual(previous, report, only_slides)
+        if ctx.text_findings is None:
+            text_ids = set(cfg.audit.checks_by_mode("text"))
+            ctx.text_findings = [
+                issue for issue in report.issues if issue.check_id in text_ids
+            ]
         (output_dir / f"{stem}.audit.json").write_text(
             report.model_dump_json(indent=2), encoding="utf-8"
         )
@@ -450,6 +492,8 @@ def run_variant(
     run_id: str | None = None,
     vlm_client: StructuredClient | None = None,
     fix_mode: str | None = None,
+    prepared: PreparedPlan | None = None,
+    text_findings: list[Issue] | None = None,
 ) -> PipelineResult:
     """Прогоняет один вариант вёрстки от шаблона до аудита.
 
@@ -460,6 +504,11 @@ def run_variant(
 
     `fix_mode` перекрывает режим из конфига — это нужно командной строке и
     интерфейсу, где режим выбирается на запуск, а не на установку.
+
+    `prepared` — готовый план с прошлого варианта. План от варианта не
+    зависит, и планировать его заново для каждого из трёх значит трижды
+    заплатить за один и тот же ответ. Ровно так же переезжает
+    `text_findings`: вопросы текстового прохода аудита задаются по плану.
     """
     template_path = Path(template_path)
     output_dir = Path(output_dir)
@@ -515,15 +564,19 @@ def run_variant(
 
     slide_count = cfg.deck.slide_count or cfg.deck.min_slides
     with _timed(manifest, "plan"):
-        plan, prompt, budget = build_plan(
-            pack,
-            client,
-            slide_count,
-            spec=spec,
-            max_bullets=cfg.audit.max_bullets_per_slide,
-            max_words_per_bullet=cfg.audit.max_words_per_bullet,
-            substitution_slack=cfg.fonts.substitution_slack,
-        )
+        if prepared is not None:
+            plan, prompt, budget = prepared.plan, prepared.prompt, prepared.budget
+        else:
+            plan, prompt, budget = build_plan(
+                pack,
+                client,
+                slide_count,
+                spec=spec,
+                max_bullets=cfg.audit.max_bullets_per_slide,
+                max_words_per_bullet=cfg.audit.max_words_per_bullet,
+                substitution_slack=cfg.fonts.substitution_slack,
+            )
+            prepared = PreparedPlan(plan=plan, prompt=prompt, budget=budget)
     if budget is not None:
         manifest.warnings.append(
             f"бюджет длины ({budget.measured_with}): заголовок {budget.title_chars} симв, "
@@ -575,6 +628,7 @@ def run_variant(
         preset=preset,
         budget=budget,
         vlm_client=vlm_client,
+        text_findings=text_findings,
     )
     built = _build(deck, plan, spec, pack, ctx, manifest, template_path)
 
@@ -605,6 +659,7 @@ def run_variant(
         built.pages,
         manifest,
         context=ctx,
+        prepared=prepared,
     )
 
 
@@ -667,4 +722,5 @@ def apply_selection(
         built.pages,
         manifest,
         context=ctx,
+        prepared=result.prepared,
     )

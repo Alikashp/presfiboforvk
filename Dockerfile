@@ -5,31 +5,12 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     HOME=/app
 
-# libreoffice-impress — конвертация .pptx → .pdf. Один libreoffice-core на
-# .pptx отвечает "source file could not be loaded", Impress обязателен.
-# poppler-utils — pdftoppm, .pdf → PNG для превью и контекстного аудита.
-# libeot0 — распаковка встроенных в шаблон шрифтов: .fntdata это EOT с
-# MTX-сжатием, срезом заголовка не достаётся. Вызывается через ctypes
-# (EOT2ttf_buffer), отдельного CLI в дистрибутиве нет.
-# fonts-* — подстановка, когда шрифт шаблона распаковать не удалось. Три
-# из них метрически совпадают с проприетарными оригиналами, то есть дают те
-# же ширины символов при другом рисунке: carlito ↔ Calibri, caladea ↔
-# Cambria, liberation ↔ Arial / Times New Roman / Courier New. Без них
-# Calibri подменялся DejaVu, ширины расходились, и бюджет длины заголовка
-# считался по чужой гарнитуре. dejavu остаётся крайним случаем — для
-# шрифтов, у которых свободного клона нет.
-# Подставляются они только для измерения текста и рендера внутри
-# контейнера; в сам .pptx всегда пишется имя шрифта из шаблона.
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        libreoffice-impress \
-        poppler-utils \
-        libeot0 \
-        fonts-dejavu-core \
-        fonts-liberation \
-        fonts-crosextra-carlito \
-        fonts-crosextra-caladea \
-        fontconfig \
-    && rm -rf /var/lib/apt/lists/*
+# Системные пакеты одним списком на все окружения: образ, CI и машину
+# разработчика. Что именно и зачем — в самом скрипте; держать список в трёх
+# местах значит однажды их разъехать.
+COPY scripts/install-system-deps.sh /tmp/install-system-deps.sh
+RUN sh /tmp/install-system-deps.sh \
+    && rm -rf /var/lib/apt/lists/* /tmp/install-system-deps.sh
 
 WORKDIR /app
 
@@ -49,6 +30,6 @@ RUN mkdir -p /app/outputs /app/.cache/templates /app/.cache/fonts
 RUN deckwright doctor
 
 EXPOSE 8501
-# Фаза 0: веб-интерфейса ещё нет, точка входа — проверка окружения.
-# В фазе 10 заменяется на: streamlit run app/ui.py --server.address=0.0.0.0
+# Веб-интерфейс — фаза 11; пока точка входа — проверка окружения.
+# Тогда заменяется на: streamlit run app/ui.py --server.address=0.0.0.0
 CMD ["deckwright", "doctor"]

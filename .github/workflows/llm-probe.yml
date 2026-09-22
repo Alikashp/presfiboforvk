@@ -61,11 +61,7 @@ jobs:
           cache: pip
 
       - name: Системные зависимости
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            libreoffice-impress poppler-utils libeot0 \
-            fonts-dejavu-core fonts-liberation fontconfig
+        run: sh scripts/install-system-deps.sh
 
       - name: Установка
         run: pip install -e ".[dev]"

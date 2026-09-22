@@ -106,20 +106,32 @@ def test_probe_runs_end_to_end_on_recorded_answers(monkeypatch, tmp_path, record
     )
 
 
-# ── Образ и CI обязаны ставить одно и то же ──────────────────────────────────
+# ── Все окружения ставят один и тот же список ────────────────────────────────
 #
-# `deckwright doctor` идёт и в сборке образа, и в обычном CI, и проверяет
-# одни и те же системные пакеты. Разъезжаются эти два списка молча: пакет
-# добавлен в Dockerfile, в CI забыт, и проверка падает на раннере, где её
-# требование не выполнено. Ровно это и случилось, когда в образ приехали
-# метрические клоны шрифтов.
+# `deckwright doctor` идёт и в сборке образа, и в CI, и проверяет одни и те же
+# системные пакеты. Пока список лежал в каждом файле отдельно, они
+# разъезжались молча — ровно это и случилось дважды: сначала в CI забыли
+# метрические клоны шрифтов, потом их забыли в пробе, и живой замер шёл на
+# подставленной гарнитуре с другими ширинами.
+#
+# Сравнивать два списка мало: консументов больше двух, и третий (машина
+# разработчика) списка не имеет вовсе. Поэтому список один —
+# `scripts/install-system-deps.sh`, — а тест следит, чтобы мимо него никто не
+# ставил пакеты сам.
+
+INSTALLER = "scripts/install-system-deps.sh"
+CONSUMERS = (
+    "Dockerfile",
+    ".github/workflows/ci.yml",
+    ".github/workflows/llm-probe.yml",
+)
 
 
 def _apt_packages(text: str) -> set[str]:
     """Пакеты из всех `apt-get install` в файле.
 
-    Строки склеиваются по переносу `\\`, потому что и в Dockerfile, и в
-    workflow список пакетов разложен по строкам.
+    Строки склеиваются по переносу `\\`, потому что список пакетов обычно
+    разложен по строкам.
     """
     joined: list[str] = []
     buffer = ""
@@ -141,23 +153,43 @@ def _apt_packages(text: str) -> set[str]:
         # Всё после `&&` — уже следующая команда, пакетов там нет.
         tail = tail.split("&&", 1)[0]
         for word in tail.split():
-            if word.startswith("-"):
+            if word.startswith("-") or word.startswith("$"):
                 continue
             packages.add(word)
     return packages
 
 
-def test_ci_installs_the_same_system_packages_as_the_image():
+def test_every_environment_installs_from_the_same_list():
+    """Ни образ, ни CI, ни проба не ставят пакеты в обход общего списка."""
     root = Path(__file__).resolve().parents[1]
-    image = _apt_packages((root / "Dockerfile").read_text("utf-8"))
-    ci = _apt_packages((root / ".github" / "workflows" / "ci.yml").read_text("utf-8"))
+    assert (root / INSTALLER).exists(), "общий список системных пакетов пропал"
 
-    assert image, "в Dockerfile не нашлось ни одного apt-пакета: разбор сломался"
-    missing = image - ci
-    assert not missing, (
-        f"в образе есть, в CI нет: {sorted(missing)}. deckwright doctor идёт в "
-        "обоих местах и проверяет одно и то же — списки обязаны совпадать"
-    )
+    for name in CONSUMERS:
+        text = (root / name).read_text("utf-8")
+        assert INSTALLER in text, f"{name} не ставит пакеты общим скриптом"
+        inline = _apt_packages(text)
+        assert not inline, (
+            f"{name} ставит пакеты мимо общего списка: {sorted(inline)}. "
+            "Списки, лежащие в двух местах, расходятся молча"
+        )
+
+
+def test_the_shared_list_covers_what_doctor_demands():
+    """Пакеты, без которых прогон падает, обязаны быть в списке.
+
+    Без `libreoffice-impress` один `libreoffice-core` отвечает на .pptx
+    «source file could not be loaded», и это выглядит как поломка кода.
+    Без `poppler-utils` не из чего делать картинки слайдов для аудита.
+    """
+    root = Path(__file__).resolve().parents[1]
+    installer = (root / INSTALLER).read_text("utf-8")
+    for package in (
+        "libreoffice-impress",
+        "poppler-utils",
+        "libeot0",
+        "fonts-crosextra-carlito",
+    ):
+        assert package in installer, f"{package} пропал из общего списка"
 
 
 def test_audit_probe_always_runs_against_a_spoiled_deck():

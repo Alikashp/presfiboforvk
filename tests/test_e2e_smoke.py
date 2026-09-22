@@ -145,3 +145,66 @@ def test_pipeline_works_on_every_available_template(template_paths, pack, record
         )
         assert check_package(outcome.pptx).ok, path.name
         assert len(outcome.pages) == len(outcome.deck.slides), path.name
+
+
+def test_plan_is_requested_once_for_all_variants(
+    template_paths, pack, recorded_dir, tmp_path_factory
+):
+    """Три варианта раскладывают один план, а не заказывают три одинаковых.
+
+    Это условие бюджета, а не экономия на спичках: по замеру вызов
+    планировщика — 34 с и $0.0054, и трижды это 102 с из пяти минут.
+    """
+    cfg = load_config(CONFIG)
+    client = RecordedClient(recorded_dir)
+    root = tmp_path_factory.mktemp("variants")
+
+    prepared = None
+    plans = []
+    for variant in ("dense", "balanced", "airy"):
+        result = run_variant(
+            template_path=template_paths[0],
+            pack=pack,
+            cfg=cfg,
+            client=client,
+            variant=variant,
+            output_dir=root / variant,
+            prepared=prepared,
+        )
+        prepared = result.prepared
+        plans.append(result.plan)
+
+    assert client.calls == 1, f"планировщик вызван {client.calls} раз вместо одного"
+    assert plans[0] == plans[1] == plans[2], "варианты разложили разные планы"
+
+
+def test_run_needs_nothing_but_a_config_file(template_paths, tmp_path, monkeypatch):
+    """A22: воспроизводимый запуск одной командой с конфиг-файлом.
+
+    Что собиралось, видно из файла конфига, а не из истории команд.
+    """
+    from pathlib import Path
+
+    import yaml
+
+    from deckwright.cli import main
+
+    root = Path(__file__).resolve().parents[1]
+    base = yaml.safe_load((root / "configs" / "config.yaml").read_text("utf-8"))
+    base["run"]["template"] = str(template_paths[0])
+    base["run"]["content"] = str(root / "tests" / "fixtures" / "content_pack.json")
+    base["run"]["output_dir"] = str(tmp_path / "out")
+    base["variants"] = ["configs/variants/balanced.yaml"]
+
+    config = root / "configs" / "_test_single_command.yaml"
+    config.write_text(yaml.safe_dump(base, allow_unicode=True), encoding="utf-8")
+    try:
+        monkeypatch.chdir(root)
+        code = main(
+            ["run", "--config", str(config), "--recorded", "tests/fixtures/recorded"]
+        )
+    finally:
+        config.unlink()
+
+    assert code == 0
+    assert list((tmp_path / "out" / "balanced").glob("*.pptx")), "колода не собралась"

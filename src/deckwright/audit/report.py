@@ -28,8 +28,13 @@ def audit_deck(
     client=None,
     only_slides: set[int] | None = None,
     prompts_dir: str | Path | None = None,
+    text_findings: list | None = None,
 ) -> AuditReport:
-    """Полный аудит одного варианта колоды."""
+    """Полный аудит одного варианта колоды.
+
+    `text_findings` — находки текстового прохода с другого варианта: вопросы
+    этого прохода задаются по плану, а план у трёх вариантов один.
+    """
     issues = []
     issues.extend(geometry.run(deck, spec))
     issues.extend(template_fidelity.run(deck, spec))
@@ -51,7 +56,7 @@ def audit_deck(
             skipped[check_id] = "картинок слайдов нет: контекстный проход не запускался"
     else:
         outcome = contextual.run(
-            deck, plan, pages, client, cfg, only_slides, prompts_dir
+            deck, plan, pages, client, cfg, only_slides, prompts_dir, text_findings
         )
         issues.extend(outcome.issues)
         skipped.update(outcome.skipped)

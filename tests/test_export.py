@@ -148,3 +148,63 @@ def deck_and_spec(template_paths, pack, recorded_dir):
     plan, _, _ = build_plan(pack, RecordedClient(recorded_dir), cfg.deck.min_slides)
     deck, _ = build_deck_ir(spec, plan, cfg.variant("balanced"), pack=pack)
     return deck, spec
+
+
+# ── Частичная растеризация ───────────────────────────────────────────────────
+#
+# Итерация цикла исправления трогает два-три слайда, а растеризация всей
+# колоды стоит 18 с из 20. Перерисовывать все страницы ради трёх незачем — но
+# переиспользование прошлых картинок обязано быть честным: страница с номером
+# 4 после правки может оказаться другим слайдом.
+
+
+def test_only_requested_pages_are_rerendered(exported, tmp_path):
+    """Перерисовывается только названная страница, список остаётся полным."""
+    from deckwright.render.png import pdf_to_png
+
+    result = exported[0][1]
+    directory = tmp_path / "png"
+    first = pdf_to_png(result.pdf, directory, dpi=48)
+    assert len(first) == len(result.deck.slides)
+
+    marks = {page: page.stat().st_mtime_ns for page in first}
+    again = pdf_to_png(result.pdf, directory, dpi=48, only_pages={2})
+
+    assert len(again) == len(first), "список страниц обязан остаться полным"
+    changed = [page for page in again if page.stat().st_mtime_ns != marks[page]]
+    assert [page.name for page in changed] == [first[1].name]
+
+
+def test_empty_selection_rerenders_nothing(exported, tmp_path):
+    """Правка могла не тронуть ни одной страницы — это законный случай."""
+    from deckwright.render.png import pdf_to_png
+
+    result = exported[0][1]
+    directory = tmp_path / "png"
+    first = pdf_to_png(result.pdf, directory, dpi=48)
+    marks = {page: page.stat().st_mtime_ns for page in first}
+
+    again = pdf_to_png(result.pdf, directory, dpi=48, only_pages=set())
+    assert len(again) == len(first)
+    assert all(page.stat().st_mtime_ns == marks[page] for page in again)
+
+
+def test_shorter_deck_leaves_no_stale_pages(exported, tmp_path):
+    """Колода стала короче — хвост прошлой сборки в отчёт попасть не должен.
+
+    Иначе аудит получил бы картинку слайда, которого в `.pdf` уже нет, а
+    интерфейс показал бы его пользователю.
+    """
+    from deckwright.render.png import pdf_to_png
+
+    result = exported[0][1]
+    directory = tmp_path / "png"
+    pages = pdf_to_png(result.pdf, directory, dpi=48)
+    stale = directory / f"{result.pdf.stem}-{len(pages) + 1:02d}.png"
+    stale.write_bytes(pages[0].read_bytes())
+
+    # Число картинок разошлось с числом страниц: частичная растеризация
+    # запрещена, идёт полная, и лишний файл убирается.
+    again = pdf_to_png(result.pdf, directory, dpi=48, only_pages={1})
+    assert not stale.exists(), "осталась страница от прошлой, более длинной сборки"
+    assert len(again) == len(pages)

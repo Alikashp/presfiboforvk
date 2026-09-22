@@ -105,6 +105,12 @@ class ImageProviderConfig(ModelConfig):
 class RunConfig(BaseModel):
     seed: int = 0
     output_dir: Path = Path("outputs")
+    # Вход прогона. Заданные здесь, они делают запуск воспроизводимым одной
+    # командой `deckwright run --config configs/config.yaml` (A22): что
+    # собиралось, видно из файла конфига, а не из истории команд. Аргументы
+    # командной строки их перекрывают.
+    template: Path | None = None
+    content: Path | None = None
     time_budget_seconds: int = Field(default=300, gt=0)
     slide_workers: int = Field(default=4, gt=0)
     max_fix_iterations: int = Field(default=2, ge=0)
