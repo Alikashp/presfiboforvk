@@ -3,6 +3,11 @@
 
 run:
   seed: 20260101
+  # Вход прогона. Заполните — и `deckwright run --config configs/config.yaml`
+  # соберёт колоду одной командой, без аргументов (A22). Аргументы командной
+  # строки эти значения перекрывают.
+  template: null
+  content: null
   # Каталог артефактов прогона. Внутри создаётся подкаталог по run_id.
   output_dir: outputs
   # Бюджет времени на колоду, секунды (ТЗ: не более 5 минут).
@@ -10,7 +15,18 @@ run:
   # Сколько слайдов собирать параллельно.
   slide_workers: 4
   # Предел итераций цикла «аудит → исправление → пересборка».
+  # Находка, пережившая предел, остаётся в отчёте и попадает в manifest.unresolved:
+  # честнее назвать её, чем крутить цикл дальше вслепую.
   max_fix_iterations: 2
+  # Что прогон делает с находками сам: review (остановиться с отчётом для
+  # выбора — умолчание ТЗ), auto (применить автоматические и пересобрать),
+  # off (не трогать). ASSISTED и контекстные не применяются ни в одном
+  # режиме — только по явному выбору пользователя в UI.
+  fix_mode: review
+  # Переписывать ли моделью выбранные текстовые ASSISTED-находки («сократить»,
+  # «разнести пункты»). Выключено: без флага выбранная находка остаётся
+  # помеченной «требует редактирования», а прогон не ходит в модель.
+  rewrite_assisted: false
 
 template:
   # Кэш разобранного TemplateSpec, ключ — хэш файла шаблона.
@@ -57,11 +73,12 @@ llm:
       temperature: 0.4
       max_tokens: 6000
       enable_thinking: false
+    # Переписывание текста слайда по выбранной находке аудита.
     shorten_text:
       temperature: 0.2
-      max_tokens: 500
+      max_tokens: 1000
       enable_thinking: false
-    audit_context:
+    audit_deck:
       temperature: 0.0
       max_tokens: 1500
       enable_thinking: false
@@ -83,12 +100,15 @@ vlm:
   # а не на модель.
   tokens_per_minute: 40000
   requests_per_minute: 1000
+  # Имена шагов обязаны совпадать с теми, которыми код зовёт модель
+  # (llm/base.py: STEPS). Параметры под другим именем не применяются вовсе,
+  # поэтому конфиг с незнакомым шагом теперь не загружается.
   steps:
-    layout_semantics:
+    audit_slide:
       temperature: 0.0
-      max_tokens: 800
+      max_tokens: 1500
       enable_thinking: false
-    audit_context:
+    audit_deck:
       temperature: 0.0
       max_tokens: 1500
       enable_thinking: false

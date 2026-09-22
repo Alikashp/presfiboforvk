@@ -64,6 +64,30 @@ class StageTiming(BaseModel):
     seconds: float = Field(ge=0)
 
 
+class FixIteration(BaseModel):
+    """Один оборот цикла «аудит → исправление → пересборка → аудит».
+
+    Цикл имеет право менять колоду, а значит обязан отчитываться: что было
+    применено, что переписано моделью и сколько находок осталось. Без этого
+    «стало лучше» проверяется только на глаз.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    number: int = Field(ge=1)
+    # Ключи применённых находок (`slide:check_id:element`).
+    applied: list[str] = Field(default_factory=list)
+    # Что применить не удалось и почему: {ключ находки: причина}.
+    skipped: dict[str, str] = Field(default_factory=dict)
+    # Слайды, текст которых переписан моделью по явному выбору.
+    rewritten_slides: list[int] = Field(default_factory=list)
+    # Слайды, пересобранные и потому переспрошенные заново.
+    rechecked_slides: list[int] = Field(default_factory=list)
+    issues_before: int = Field(default=0, ge=0)
+    issues_after: int = Field(default=0, ge=0)
+    seconds: float = Field(default=0.0, ge=0)
+
+
 class FontSubstitution(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -88,6 +112,13 @@ class RunManifest(BaseModel):
     models: list[ModelUsage] = Field(default_factory=list)
 
     timings: list[StageTiming] = Field(default_factory=list)
+    # Как прогон распорядился находками аудита. Пустой список означает, что
+    # цикл исправления не запускался: режим `review` или `off`.
+    fix_mode: str = Field(default="off", pattern=r"^(off|review|auto|selected)$")
+    fix_iterations: list[FixIteration] = Field(default_factory=list)
+    # Находки, оставшиеся после предела итераций. Оставить и назвать честнее,
+    # чем чинить дальше вслепую.
+    unresolved: list[str] = Field(default_factory=list)
     font_substitutions: list[FontSubstitution] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
 

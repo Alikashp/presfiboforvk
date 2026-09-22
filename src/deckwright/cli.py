@@ -62,23 +62,53 @@ def _make_client(cfg, recorded_dir: str | None) -> StructuredClient:
 
 def _cmd_run(args: argparse.Namespace) -> int:
     cfg = load_config(args.config)
+    # Шаблон и контент берутся из конфига, если не заданы аргументами: A22
+    # требует воспроизводимого запуска одной командой с конфиг-файлом.
+    template = args.template or cfg.run.template
+    content = args.content or cfg.run.content
+    missing = [
+        name
+        for name, value in (("--template", template), ("--content", content))
+        if value is None
+    ]
+    if missing:
+        print(
+            f"Не задано: {', '.join(missing)}. Укажите аргументами или пропишите "
+            f"run.template и run.content в {args.config}.",
+            file=sys.stderr,
+        )
+        return 2
+
     pack = ContentPack.model_validate(
-        json.loads(Path(args.content).read_text(encoding="utf-8"))
+        json.loads(Path(content).read_text(encoding="utf-8"))
     )
     client = _make_client(cfg, args.recorded)
 
     variants = [v.name for v in cfg.variants] if args.variant is None else [args.variant]
     output_root = Path(args.output or cfg.run.output_dir)
 
+    # План от варианта не зависит: три варианта раскладывают одно и то же
+    # содержание по-разному. Планируется он один раз и переиспользуется —
+    # иначе три одинаковых ответа модели стоят втрое дороже и втрое дольше
+    # (по замеру 34 с на вызов).
+    prepared = None
+    text_findings = None
     for variant in variants:
         result = run_variant(
-            template_path=args.template,
+            template_path=template,
             pack=pack,
             cfg=cfg,
             client=client,
             variant=variant,
             output_dir=output_root / variant,
+            fix_mode=args.fix,
+            prepared=prepared,
+            text_findings=text_findings,
         )
+        prepared = result.prepared
+        # Вопросы текстового прохода аудита задаются по плану, а план один на
+        # три варианта: опечатки и единый язык от вёрстки не зависят.
+        text_findings = result.text_findings
         manifest = result.manifest
         stages = ", ".join(f"{t.stage} {t.seconds}с" for t in manifest.timings)
         print(
@@ -87,9 +117,61 @@ def _cmd_run(args: argparse.Namespace) -> int:
         )
         print(f"[{variant}] {stages}")
         print(f"[{variant}] всего {manifest.total_seconds}с из {cfg.run.time_budget_seconds}с")
+
+        # Что цикл исправления сделал с колодой. Молчать об этом нельзя:
+        # прогон менял колоду, и человек обязан видеть, что именно.
+        for record in manifest.fix_iterations:
+            rewritten = (
+                f", переписано слайдов {len(record.rewritten_slides)}"
+                if record.rewritten_slides
+                else ""
+            )
+            print(
+                f"[{variant}] итерация {record.number}: применено "
+                f"{len(record.applied)}, находок {record.issues_before} → "
+                f"{record.issues_after}{rewritten}, {record.seconds}с"
+            )
+        _print_report(variant, result.report, manifest)
+
         for warning in manifest.warnings:
             print(f"[{variant}] ⚠ {warning}", file=sys.stderr)
     return 0
+
+
+def _print_report(variant: str, report, manifest) -> None:
+    """Отчёт аудита в терминал: в режиме `review` выбирать будет человек.
+
+    Ключ находки печатается рядом с ней: это то, чем она выбирается, и без
+    него режим «остановиться с отчётом» не доведён до конца — выбрать было бы
+    нечем.
+    """
+    if not report.issues:
+        print(f"[{variant}] аудит: находок нет")
+    else:
+        automatic = len(report.auto_fixable)
+        print(
+            f"[{variant}] аудит: находок {len(report.issues)} "
+            f"(ошибок {report.error_count}, чинится само {automatic})"
+        )
+        for issue in report.issues:
+            print(
+                f"[{variant}]   [{issue.severity.value}] {issue.key}"
+                f" — {issue.message} ({issue.fix.kind.value})"
+            )
+    if report.skipped_checks:
+        print(f"[{variant}] не выполнено проверок: {len(report.skipped_checks)}")
+        for check_id, reason in sorted(report.skipped_checks.items()):
+            print(f"[{variant}]   {check_id}: {reason}")
+    if manifest.fix_mode == "review" and report.auto_fixable:
+        print(
+            f"[{variant}] режим review: колода не менялась. "
+            "Повторите с --fix auto или выберите находки в интерфейсе."
+        )
+    if manifest.unresolved:
+        print(
+            f"[{variant}] осталось после предела итераций: "
+            f"{', '.join(manifest.unresolved)}"
+        )
 
 
 def _cmd_probe(args: argparse.Namespace) -> int:
@@ -473,14 +555,32 @@ def main(argv: list[str] | None = None) -> int:
 
     run = sub.add_parser("run", help="Собрать презентацию по шаблону и контент-пакету.")
     run.add_argument("--config", default=str(DEFAULT_CONFIG), help="Путь к config.yaml.")
-    run.add_argument("--template", required=True, help="Шаблон .pptx.")
-    run.add_argument("--content", required=True, help="Контент-пакет в JSON.")
+    run.add_argument(
+        "--template", default=None, help="Шаблон .pptx; по умолчанию run.template из конфига."
+    )
+    run.add_argument(
+        "--content",
+        default=None,
+        help="Контент-пакет в JSON; по умолчанию run.content из конфига.",
+    )
     run.add_argument("--variant", default=None, help="Один вариант вместо всех из конфига.")
     run.add_argument("--output", default=None, help="Каталог артефактов.")
     run.add_argument(
         "--recorded",
         default=None,
         help="Каталог записанных ответов модели: прогон без сети и без ключа.",
+    )
+    run.add_argument(
+        "--fix",
+        choices=("off", "review", "auto"),
+        default=None,
+        help=(
+            "Что делать с находками аудита; по умолчанию режим из config.yaml. "
+            "review — показать отчёт и не трогать колоду, auto — применить "
+            "автоматические исправления и пересобрать, off — не проверять на "
+            "исправимость вовсе. ASSISTED и контекстные находки не применяются "
+            "ни в одном режиме: они идут только явным выбором в интерфейсе."
+        ),
     )
     run.set_defaults(func=_cmd_run)
 

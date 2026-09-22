@@ -43,6 +43,19 @@ def parse_number(text: str) -> float | None:
     return float(found.group(0).replace(",", ".")) if found else None
 
 
+def numbers_in(text: str) -> set[float]:
+    """Все числа строки. Нужно проверке «переписывание не ввело новых чисел».
+
+    Запятая и точка считаются одним разделителем: «4,6» и «4.6» — одно число,
+    написанное по-разному, и разница написания не должна выглядеть выдуманным
+    фактом.
+    """
+    return {
+        float(found.replace(",", "."))
+        for found in _NUMBER.findall(text.replace("\u00a0", " "))
+    }
+
+
 def _evaluate(node: ast.AST, values: dict[str, float]) -> float:
     if isinstance(node, ast.Expression):
         return _evaluate(node.body, values)

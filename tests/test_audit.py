@@ -581,3 +581,58 @@ def test_slide_answers_schema_survives_a_terse_model():
         {"answers": [{"check_id": "content.has_content", "passed": True}]}
     )
     assert parsed.answers[0].confidence == 0.5
+
+
+def test_text_pass_is_asked_once_for_the_whole_deck(
+    template_paths, pack, recorded_dir, tmp_path_factory
+):
+    """Шесть вопросов по тексту задаются раз на колоду, а не раз на вариант.
+
+    Содержание у трёх вариантов одно: опечатки, единый язык и происхождение
+    чисел от вёрстки не зависят. По замеру текстовый проход — 12.2 с и 1.9
+    тысячи токенов, и трижды это цена ни за что.
+    """
+    from deckwright.pipeline import run_variant
+
+    class CountingVlm:
+        """Считает вопросы по шагам. Отвечает «да» на всё: находки здесь не важны."""
+
+        mocked = True
+
+        def __init__(self) -> None:
+            self.calls = 0
+            self.steps: list[str] = []
+
+        def complete(self, step, prompt, schema, images=None):
+            self.calls += 1
+            self.steps.append(step)
+            return schema.model_validate({"answers": []})
+
+    cfg = load_config(CONFIG)
+    vlm = CountingVlm()
+    root = tmp_path_factory.mktemp("text-pass")
+
+    prepared = None
+    text_findings = None
+    for variant in ("dense", "balanced"):
+        result = run_variant(
+            template_path=template_paths[0],
+            pack=pack,
+            cfg=cfg,
+            client=RecordedClient(recorded_dir),
+            variant=variant,
+            output_dir=root / variant,
+            vlm_client=vlm,
+            prepared=prepared,
+            text_findings=text_findings,
+        )
+        prepared = result.prepared
+        text_findings = result.text_findings
+
+    assert vlm.steps.count("audit_deck") == 1, (
+        f"проход по тексту задан {vlm.steps.count('audit_deck')} раза: "
+        "он не зависит от варианта вёрстки"
+    )
+    # Картиночный проход, наоборот, обязан идти по каждому варианту: вёрстка
+    # у них разная, и видно это только на картинке.
+    assert vlm.steps.count("audit_slide") >= 2 * len(result.deck.slides) - 1

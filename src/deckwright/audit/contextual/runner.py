@@ -64,6 +64,9 @@ class ContextualResult:
 
     issues: list[Issue] = field(default_factory=list)
     skipped: dict[str, str] = field(default_factory=dict)
+    # Текстовый проход не задавался заново: ответы принесены с другого
+    # варианта. Не то же самое, что «пропущен»: вопрос задан, просто один раз.
+    text_reused: bool = False
 
 
 def _questions(check_ids: list[str]) -> str:
@@ -220,12 +223,18 @@ def run(
     cfg,
     only_slides: set[int] | None = None,
     prompts_dir: str | Path | None = None,
+    text_findings: list[Issue] | None = None,
 ) -> ContextualResult:
     """Оба контекстных прохода. Невыполненное честно перечисляется.
 
     `only_slides` — номера слайдов, изменившихся после исправления. Вторая
     итерация трогает два-три слайда из тридцати, и переспрашивать всю колоду
     значит платить за неё дважды.
+
+    `text_findings` — ответы текстового прохода, уже полученные на другом
+    варианте. Вопросы этого прохода задаются по плану, а план у трёх
+    вариантов один: опечатки, единый язык и происхождение чисел от вёрстки не
+    зависят. Управляется `audit.text_checks_once_per_deck`.
     """
     result = ContextualResult()
     audit = cfg.audit
@@ -259,10 +268,14 @@ def run(
 
     text_ids = audit.checks_by_mode("text")
     if text_ids:
-        issues, problem = _text_pass(plan, client, text_ids, prompts_dir)
-        result.issues.extend(issues)
-        if problem:
-            for check_id in text_ids:
-                result.skipped[check_id] = problem
+        if text_findings is not None and getattr(audit, "text_checks_once_per_deck", True):
+            result.issues.extend(text_findings)
+            result.text_reused = True
+        else:
+            issues, problem = _text_pass(plan, client, text_ids, prompts_dir)
+            result.issues.extend(issues)
+            if problem:
+                for check_id in text_ids:
+                    result.skipped[check_id] = problem
 
     return result

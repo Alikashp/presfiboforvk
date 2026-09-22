@@ -21,12 +21,7 @@ jobs:
       # Те же системные пакеты, что в образе: без них deckwright doctor
       # и часть тестов проверяют не то окружение, в котором сервис работает.
       - name: Системные зависимости
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            libreoffice-impress poppler-utils libeot0 \
-            fonts-dejavu-core fonts-liberation \
-            fonts-crosextra-carlito fonts-crosextra-caladea fontconfig
+        run: sh scripts/install-system-deps.sh
 
       - name: Установка
         run: pip install -e ".[dev]"
@@ -52,12 +47,7 @@ jobs:
           cache: pip
 
       - name: Системные зависимости
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            libreoffice-impress poppler-utils libeot0 \
-            fonts-dejavu-core fonts-liberation \
-            fonts-crosextra-carlito fonts-crosextra-caladea fontconfig
+        run: sh scripts/install-system-deps.sh
 
       - name: Установка
         run: pip install -e ".[dev]"

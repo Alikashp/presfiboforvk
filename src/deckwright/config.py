@@ -79,6 +79,24 @@ class ModelConfig(BaseModel):
         """Параметры шага; для неописанного шага — значения по умолчанию."""
         return self.steps.get(name, StepParams())
 
+    @model_validator(mode="after")
+    def _steps_are_called_by_someone(self) -> ModelConfig:
+        """Параметры под именем шага, которого нет, не применяются никогда.
+
+        Выглядит это как настроенная температура, а работает как умолчание.
+        Поэтому опечатка в имени шага — ошибка загрузки конфига, а не тихий
+        откат к значениям по умолчанию.
+        """
+        from deckwright.llm.base import STEPS
+
+        unknown = sorted(set(self.steps) - STEPS)
+        if unknown:
+            raise ValueError(
+                f"параметры заданы для шагов, которых в коде нет: {', '.join(unknown)}; "
+                f"известны: {', '.join(sorted(STEPS))}"
+            )
+        return self
+
 
 class ImageProviderConfig(ModelConfig):
     enabled: bool = False
@@ -87,9 +105,29 @@ class ImageProviderConfig(ModelConfig):
 class RunConfig(BaseModel):
     seed: int = 0
     output_dir: Path = Path("outputs")
+    # Вход прогона. Заданные здесь, они делают запуск воспроизводимым одной
+    # командой `deckwright run --config configs/config.yaml` (A22): что
+    # собиралось, видно из файла конфига, а не из истории команд. Аргументы
+    # командной строки их перекрывают.
+    template: Path | None = None
+    content: Path | None = None
     time_budget_seconds: int = Field(default=300, gt=0)
     slide_workers: int = Field(default=4, gt=0)
     max_fix_iterations: int = Field(default=2, ge=0)
+    # Что прогон делает с находками аудита сам.
+    #
+    #   review — остановиться с отчётом: выбирает пользователь (умолчание ТЗ);
+    #   auto   — применить находки с исправлением типа AUTOMATIC и пересобрать;
+    #   off    — не трогать колоду вовсе.
+    #
+    # ASSISTED и контекстные находки не применяются ни в одном из режимов:
+    # они идут только через явный выбор (`pipeline.apply_selection`).
+    fix_mode: str = Field(default="review", pattern=r"^(off|review|auto)$")
+    # Переписывать ли выбранные текстовые ASSISTED-находки моделью. Без флага
+    # такая находка остаётся помеченной «требует редактирования»: это не
+    # вторая ветка поведения, а отсутствие шага — в тестах и e2e модель не
+    # дёргается.
+    rewrite_assisted: bool = False
 
 
 class TemplateConfig(BaseModel):
