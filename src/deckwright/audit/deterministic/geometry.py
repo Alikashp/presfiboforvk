@@ -1,0 +1,269 @@
+"""Геометрические проверки: где элементы стоят и не мешают ли они друг другу.
+
+Всё считается по `SlideIR` — тому же представлению, по которому колоду верстали.
+Проверять по собранному `.pptx` было бы вернее к результату, но `SlideIR`
+несёт роли и провенанс, без которых находка не объяснима человеку: «элемент
+s3_b1 за правым краем» полезнее, чем «фигура 7».
+"""
+
+from __future__ import annotations
+
+from deckwright.audit.registry import check
+from deckwright.schemas import (
+    Box,
+    DeckIR,
+    FixKind,
+    Issue,
+    ProposedFix,
+    SlideIR,
+    SlotRole,
+    TemplateSpec,
+)
+
+# Какую долю меньшего элемента разрешено перекрыть. Рамки шаблона
+# соприкасаются краями постоянно, и ноль здесь дал бы находку на каждом слайде.
+OVERLAP_TOLERANCE = 0.15
+
+# Допуск выравнивания по направляющей сетки: четверть миллиметра. Глазом такое
+# не видно, а находка о нём только засоряет отчёт.
+GRID_TOLERANCE_EMU = 9_144
+
+# Насколько пропорции картинки могут разойтись с исходными, прежде чем это
+# станет заметным растяжением.
+ASPECT_TOLERANCE = 0.05
+
+# Роли, которые живут в полях намеренно: логотип и колонтитул для того там и
+# стоят. Требовать от них соблюдения полей значит находить то, что задумано.
+_MARGIN_EXEMPT = frozenset({SlotRole.LOGO, SlotRole.FOOTER, SlotRole.SLIDE_NUMBER, SlotRole.DECOR})
+
+
+def _issue(check_id: str, slide_index: int, message: str, **kwargs) -> Issue:
+    """Находка с паспортом из реестра: серьёзность и категория не выдумываются."""
+    spec = check(check_id)
+    fix = kwargs.pop("fix", None)
+    return Issue(
+        check_id=check_id,
+        kind=spec.kind,
+        category=spec.category,
+        severity=spec.severity,
+        slide_index=slide_index,
+        message=message,
+        fix=fix or ProposedFix(kind=FixKind.NONE),
+        **kwargs,
+    )
+
+
+def _overlap_area(a: Box, b: Box) -> int:
+    width = min(a.right, b.right) - max(a.x, b.x)
+    height = min(a.bottom, b.bottom) - max(a.y, b.y)
+    return max(0, width) * max(0, height)
+
+
+def out_of_bounds(slide: SlideIR, deck: DeckIR) -> list[Issue]:
+    """Элемент, уехавший за край, в PDF просто обрезается — молча."""
+    found: list[Issue] = []
+    for element in slide.all_elements():
+        box = element.box
+        over = max(
+            -box.x, -box.y, box.right - deck.slide_width_emu, box.bottom - deck.slide_height_emu
+        )
+        if over <= 0:
+            continue
+        found.append(
+            _issue(
+                "layout.out_of_bounds",
+                slide.index,
+                f"{element.id}: выходит за слайд на {over / 914400:.2f} дюйма",
+                element_ids=[element.id],
+                bbox=box,
+                fix=ProposedFix(
+                    kind=FixKind.AUTOMATIC,
+                    description="сдвинуть элемент внутрь слайда",
+                    action="move_inside_slide",
+                    params={"element_id": element.id},
+                ),
+            )
+        )
+    return found
+
+
+def overlaps(slide: SlideIR) -> list[Issue]:
+    """Текст поверх текста читается как каша, но все структурные проверки проходит."""
+    found: list[Issue] = []
+    elements = [e for e in slide.all_elements() if e.text is not None]
+    for first in range(len(elements)):
+        for second in range(first + 1, len(elements)):
+            a, b = elements[first], elements[second]
+            area = _overlap_area(a.box, b.box)
+            smaller = min(a.box.w * a.box.h, b.box.w * b.box.h)
+            if smaller <= 0 or area / smaller <= OVERLAP_TOLERANCE:
+                continue
+            found.append(
+                _issue(
+                    "layout.overlap",
+                    slide.index,
+                    f"{a.id} и {b.id} перекрываются на {100 * area / smaller:.0f}%",
+                    element_ids=[a.id, b.id],
+                    bbox=Box(
+                        x=max(a.box.x, b.box.x),
+                        y=max(a.box.y, b.box.y),
+                        w=max(1, min(a.box.right, b.box.right) - max(a.box.x, b.box.x)),
+                        h=max(1, min(a.box.bottom, b.box.bottom) - max(a.box.y, b.box.y)),
+                    ),
+                )
+            )
+    return found
+
+
+def margins(slide: SlideIR, deck: DeckIR, spec: TemplateSpec) -> list[Issue]:
+    """Поля шаблона — не рекомендация: по ним колода читается как одна вещь."""
+    grid = spec.grid
+    if grid is None:
+        return []
+    left, top = grid.margin_left_emu, grid.margin_top_emu
+    right = deck.slide_width_emu - grid.margin_right_emu
+    bottom = deck.slide_height_emu - grid.margin_bottom_emu
+
+    found: list[Issue] = []
+    for element in slide.all_elements():
+        if element.role in _MARGIN_EXEMPT:
+            continue
+        box = element.box
+        over = max(left - box.x, top - box.y, box.right - right, box.bottom - bottom)
+        if over <= GRID_TOLERANCE_EMU:
+            continue
+        found.append(
+            _issue(
+                "layout.margin_violation",
+                slide.index,
+                f"{element.id}: заходит в поле шаблона на {over / 914400:.2f} дюйма",
+                element_ids=[element.id],
+                bbox=box,
+                fix=ProposedFix(
+                    kind=FixKind.AUTOMATIC,
+                    description="вернуть элемент в поля",
+                    action="move_inside_margins",
+                    params={"element_id": element.id},
+                ),
+            )
+        )
+    return found
+
+
+def off_grid(slide: SlideIR, spec: TemplateSpec) -> list[Issue]:
+    """Левый край элемента обязан совпадать с направляющей шаблона.
+
+    Проверка информационная: шаблон, у которого направляющих нет вовсе,
+    молчит, а не сыплет находками.
+    """
+    grid = spec.grid
+    if grid is None or not grid.columns:
+        return []
+    guides = sorted(set(grid.columns) | {grid.margin_left_emu})
+
+    found: list[Issue] = []
+    for element in slide.all_elements():
+        if element.role in _MARGIN_EXEMPT:
+            continue
+        nearest = min(guides, key=lambda guide: abs(guide - element.box.x))
+        drift = abs(nearest - element.box.x)
+        if drift <= GRID_TOLERANCE_EMU:
+            continue
+        found.append(
+            _issue(
+                "layout.off_grid",
+                slide.index,
+                f"{element.id}: левый край в {drift / 914400:.2f} дюйма "
+                "от ближайшей направляющей",
+                element_ids=[element.id],
+                bbox=element.box,
+                fix=ProposedFix(
+                    kind=FixKind.AUTOMATIC,
+                    description="притянуть элемент к направляющей",
+                    action="snap_to_grid",
+                    params={"element_id": element.id, "x": nearest},
+                ),
+            )
+        )
+    return found
+
+
+def stretched_images(slide: SlideIR) -> list[Issue]:
+    """Растянутая картинка — единственная ошибка вёрстки, заметная всем сразу."""
+    found: list[Issue] = []
+    for element in slide.all_elements():
+        image = element.image
+        if image is None or not image.native_w or not image.native_h:
+            continue
+        native = image.native_w / image.native_h
+        placed = element.box.w / element.box.h if element.box.h else native
+        if native <= 0 or abs(placed - native) / native <= ASPECT_TOLERANCE:
+            continue
+        found.append(
+            _issue(
+                "layout.image_stretched",
+                slide.index,
+                f"{element.id}: пропорции {placed:.2f} против исходных {native:.2f}",
+                element_ids=[element.id],
+                bbox=element.box,
+                fix=ProposedFix(
+                    kind=FixKind.AUTOMATIC,
+                    description="вернуть картинке исходные пропорции",
+                    action="restore_aspect",
+                    params={"element_id": element.id},
+                ),
+            )
+        )
+    return found
+
+
+def text_overflow(slide: SlideIR) -> list[Issue]:
+    """Переполнение, которое вёрстка уже посчитала и записала в IR.
+
+    Пересчитывать его здесь нечем и незачем: фиттер мерил по метрикам шрифта
+    и знает, на сколько не хватило. Аудит только переводит это в находку.
+    """
+    found: list[Issue] = []
+    for element in slide.all_elements():
+        if element.text is None or not element.text.truncated:
+            continue
+        found.append(
+            _issue(
+                "layout.text_overflow",
+                slide.index,
+                f"{element.id}: текст не помещается в рамку",
+                element_ids=[element.id],
+                bbox=element.box,
+                fix=ProposedFix(
+                    kind=FixKind.ASSISTED,
+                    description="сократить текст или разнести блоки на два слайда",
+                    action="shorten_or_split",
+                    params={"element_id": element.id},
+                ),
+            )
+        )
+    return found
+
+
+def run(deck: DeckIR, spec: TemplateSpec) -> list[Issue]:
+    """Все геометрические проверки по всей колоде."""
+    found: list[Issue] = []
+    for slide in deck.slides:
+        found.extend(out_of_bounds(slide, deck))
+        found.extend(overlaps(slide))
+        found.extend(margins(slide, deck, spec))
+        found.extend(off_grid(slide, spec))
+        found.extend(stretched_images(slide))
+        found.extend(text_overflow(slide))
+    return found
+
+
+__all__ = [
+    "margins",
+    "off_grid",
+    "out_of_bounds",
+    "overlaps",
+    "run",
+    "stretched_images",
+    "text_overflow",
+]

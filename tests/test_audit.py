@@ -1,0 +1,583 @@
+"""Аудит: на каждую детерминированную проверку позитив и негатив.
+
+Позитив — «на чистом материале находки нет»; негатив — «на подпорченном
+находка есть». Только вторая половина доказывает, что проверка вообще
+работает: проверка, которая всегда молчит, проходит позитивный тест идеально.
+"""
+
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).parent / "fixtures"))
+
+from deckwright.audit import fixers
+from deckwright.audit.contextual.runner import Answer, SlideAnswers
+from deckwright.audit.deterministic import content as content_checks
+from deckwright.audit.deterministic import geometry, template_fidelity
+from deckwright.audit.registry import BY_ID, CHECKS, check, deterministic_ids
+from deckwright.audit.report import audit_deck
+from deckwright.config import load_config
+from deckwright.llm.fake import RecordedClient
+from deckwright.pipeline import run_variant
+from deckwright.schemas import (
+    Box,
+    CheckKind,
+    ContentPack,
+    FixKind,
+    Severity,
+)
+
+CONFIG = "configs/config.yaml"
+AUDIT_DOC = Path(__file__).resolve().parents[1] / "docs" / "AUDIT.md"
+
+
+@pytest.fixture(scope="module")
+def pack(content_pack_path):
+    return ContentPack.model_validate(json.loads(content_pack_path.read_text("utf-8")))
+
+
+@pytest.fixture(scope="module")
+def clean(template_paths, pack, recorded_dir, tmp_path_factory):
+    """Колода, собранная пайплайном: материал для позитивных проверок."""
+    cfg = load_config(CONFIG)
+    return run_variant(
+        template_path=template_paths[0],
+        pack=pack,
+        cfg=cfg,
+        client=RecordedClient(recorded_dir),
+        variant="balanced",
+        output_dir=tmp_path_factory.mktemp("audit"),
+    )
+
+
+# ── Реестр ───────────────────────────────────────────────────────────────────
+
+
+def test_every_check_is_typed_and_documented():
+    """A14: каждая проверка помечена типом. A13: и описана в AUDIT.md."""
+    assert AUDIT_DOC.exists(), "docs/AUDIT.md не написан"
+    doc = AUDIT_DOC.read_text("utf-8")
+    for item in CHECKS:
+        assert item.kind in (CheckKind.DETERMINISTIC, CheckKind.CONTEXTUAL)
+        assert item.id in doc, f"проверка {item.id} не описана в AUDIT.md"
+
+
+def test_audit_doc_invents_no_checks():
+    """Документация не должна обещать проверок, которых нет в коде.
+
+    Ищутся только имена в пространствах категорий: в тексте есть и параметры
+    конфига вроде `audit.contextual_dpi`, и они проверками не являются.
+    """
+    import re
+
+    from deckwright.schemas import IssueCategory
+
+    prefixes = "|".join(category.value for category in IssueCategory)
+    doc = AUDIT_DOC.read_text("utf-8")
+    mentioned = set(re.findall(rf"`(({prefixes})\.[a-z0-9_]+)`", doc))
+    unknown = {name for name, _ in mentioned if name not in BY_ID}
+    assert not unknown, f"в AUDIT.md описаны несуществующие проверки: {sorted(unknown)}"
+
+
+def test_contextual_findings_are_never_auto_fixed():
+    """Ответ модели на повторе может отличаться — молча править по нему нельзя."""
+    for item in CHECKS:
+        if item.kind is CheckKind.CONTEXTUAL:
+            assert item.fix is not FixKind.AUTOMATIC, item.id
+
+
+def test_unknown_check_id_is_a_loud_error():
+    with pytest.raises(KeyError, match="не объявлена"):
+        check("layout.нет_такой")
+
+
+# ── Позитив: на собранной колоде тихо там, где должно быть тихо ──────────────
+
+
+def test_clean_deck_has_no_errors(clean, pack):
+    """Колода, собранная пайплайном, не должна давать находок уровня ERROR.
+
+    Предупреждения допустимы — это переполнение и поля, про которые вёрстка
+    честно сообщила. Ошибка означает, что колоду нельзя отдавать.
+    """
+    cfg = load_config(CONFIG)
+    report = audit_deck(
+        clean.deck, clean.spec, clean.plan, pack, cfg,
+        pptx_path=clean.pptx, pages=clean.pages, client=None,
+    )
+    errors = [i for i in report.issues if i.severity is Severity.ERROR]
+    assert not errors, [f"{i.check_id}: {i.message}" for i in errors[:5]]
+
+
+def test_every_finding_carries_what_a15_requires(clean, pack):
+    """A15: id, тип, серьёзность, слайд, bbox, описание, исправление."""
+    cfg = load_config(CONFIG)
+    report = audit_deck(
+        clean.deck, clean.spec, clean.plan, pack, cfg,
+        pptx_path=clean.pptx, pages=clean.pages, client=None,
+    )
+    for issue in report.issues:
+        assert issue.check_id in BY_ID, issue.check_id
+        assert issue.slide_index >= 1
+        assert issue.message.strip()
+        assert issue.fix.kind in tuple(FixKind)
+        if issue.fix.kind in (FixKind.AUTOMATIC, FixKind.ASSISTED):
+            assert issue.fix.action, f"{issue.check_id}: исправление без операции"
+
+
+def test_skipped_checks_say_what_was_not_asked(clean, pack):
+    """Пустой список находок без модели означал бы «всё хорошо» — а вопрос не задан."""
+    cfg = load_config(CONFIG)
+    report = audit_deck(
+        clean.deck, clean.spec, clean.plan, pack, cfg,
+        pptx_path=clean.pptx, pages=clean.pages, client=None,
+    )
+    from deckwright.audit.registry import contextual_ids
+
+    assert set(report.skipped_checks) >= set(contextual_ids()), (
+        "контекстные проверки не выполнялись, но в отчёте об этом не сказано"
+    )
+    assert all(report.skipped_checks.values()), "причина пропуска не указана"
+
+
+# ── Негатив: подпорченный материал обязан ловиться ───────────────────────────
+
+
+def _first_text_element(deck):
+    for slide in deck.slides:
+        for element in slide.all_elements():
+            if element.text is not None:
+                return slide, element
+    raise AssertionError("в колоде нет ни одного текстового элемента")
+
+
+def test_out_of_bounds_is_caught(clean):
+    slide, element = _first_text_element(clean.deck)
+    original = element.box
+    element.box = Box(x=original.x, y=clean.deck.slide_height_emu, w=original.w, h=original.h)
+    try:
+        found = geometry.out_of_bounds(slide, clean.deck)
+        assert found and found[0].check_id == "layout.out_of_bounds"
+        assert found[0].bbox is not None
+    finally:
+        element.box = original
+
+
+def test_overlap_is_caught(clean):
+    slide = next(
+        s for s in clean.deck.slides
+        if len([e for e in s.all_elements() if e.text is not None]) >= 2
+    )
+    texts = [e for e in slide.all_elements() if e.text is not None]
+    original = texts[1].box
+    texts[1].box = texts[0].box
+    try:
+        found = geometry.overlaps(slide)
+        assert found and found[0].check_id == "layout.overlap"
+    finally:
+        texts[1].box = original
+
+
+def test_margin_violation_is_caught(clean):
+    if clean.spec.grid is None:
+        pytest.skip("у шаблона нет полей")
+    slide, element = _first_text_element(clean.deck)
+    original = element.box
+    element.box = Box(x=0, y=0, w=original.w, h=original.h)
+    try:
+        found = geometry.margins(slide, clean.deck, clean.spec)
+        assert any(i.check_id == "layout.margin_violation" for i in found)
+    finally:
+        element.box = original
+
+
+def test_stretched_image_is_caught(clean):
+    from deckwright.schemas import (
+        Element,
+        ElementKind,
+        ImageContent,
+        Provenance,
+        SlotRole,
+        SourceKind,
+    )
+
+    slide = clean.deck.slides[0]
+    stretched = Element(
+        id="test_stretched",
+        kind=ElementKind.IMAGE,
+        role=SlotRole.IMAGE,
+        box=Box(x=0, y=0, w=4_000_000, h=500_000),
+        provenance=Provenance(kind=SourceKind.SLIDE),
+        image=ImageContent(path="x.png", native_w=800, native_h=800),
+    )
+    slide.elements.append(stretched)
+    try:
+        found = geometry.stretched_images(slide)
+        assert any(i.check_id == "layout.image_stretched" for i in found)
+    finally:
+        slide.elements.remove(stretched)
+
+
+def _restyle(element, **style_updates):
+    """Меняет стиль первого абзаца. Стили заморожены, поэтому через копию."""
+    paragraph = element.text.paragraphs[0]
+    element.text.paragraphs[0] = paragraph.model_copy(
+        update={"style": paragraph.style.model_copy(update=style_updates)}
+    )
+
+
+def test_foreign_font_is_caught(clean):
+    deck = clean.deck.model_copy(deep=True)
+    slide, element = _first_text_element(deck)
+    _restyle(element, font_family="Comic Sans MS")
+    found = template_fidelity.fonts_and_sizes(slide, clean.spec)
+    assert any(i.check_id == "template.font_not_in_template" for i in found)
+
+
+def test_size_outside_the_scale_is_caught(clean):
+    deck = clean.deck.model_copy(deep=True)
+    slide, element = _first_text_element(deck)
+    _restyle(element, size_pt=13.7371)
+    found = template_fidelity.fonts_and_sizes(slide, clean.spec)
+    assert any(i.check_id == "template.size_not_in_scale" for i in found)
+
+
+def test_low_contrast_is_caught(clean):
+    deck = clean.deck.model_copy(deep=True)
+    slide = next((s for s in deck.slides if s.background is not None), None)
+    if slide is None:
+        pytest.skip("у колоды нет слайда с известным фоном")
+    element = next(e for e in slide.all_elements() if e.text is not None)
+    _restyle(element, color=slide.background)
+    found = template_fidelity.contrast(slide)
+    assert any(i.check_id == "template.low_contrast" for i in found)
+
+
+def test_color_outside_the_palette_is_caught(clean):
+    from deckwright.schemas import Color
+
+    deck = clean.deck.model_copy(deep=True)
+    slide, element = _first_text_element(deck)
+    _restyle(element, color=Color(rgb="FF00FF"))
+    found = template_fidelity.colors(slide, clean.spec)
+    assert any(i.check_id == "template.color_not_in_palette" for i in found)
+
+
+def test_off_grid_element_is_caught(clean):
+    if clean.spec.grid is None or not clean.spec.grid.columns:
+        pytest.skip("у шаблона нет направляющих")
+    deck = clean.deck.model_copy(deep=True)
+    slide, element = _first_text_element(deck)
+    guides = sorted(set(clean.spec.grid.columns) | {clean.spec.grid.margin_left_emu})
+    element.box = Box(x=guides[0] + 200_000, y=element.box.y, w=element.box.w, h=element.box.h)
+    found = geometry.off_grid(slide, clean.spec)
+    assert any(i.check_id == "layout.off_grid" for i in found)
+
+
+def test_moved_logo_is_caught(clean):
+    from deckwright.schemas import (
+        Element,
+        ElementKind,
+        Provenance,
+        RecurringElement,
+        SourceKind,
+    )
+    from deckwright.schemas import SlotRole as Role
+
+    anchor = RecurringElement(
+        id="logo1",
+        role=Role.LOGO,
+        box=Box(x=100_000, y=100_000, w=500_000, h=300_000),
+        frequency=1.0,
+        provenance=Provenance(kind=SourceKind.SLIDE),
+    )
+    spec = clean.spec.model_copy(update={"recurring": [anchor]})
+    deck = clean.deck.model_copy(deep=True)
+    slide = deck.slides[0]
+    slide.elements.append(
+        Element(
+            id="test_logo",
+            kind=ElementKind.SHAPE,
+            role=Role.LOGO,
+            box=Box(x=5_000_000, y=3_000_000, w=500_000, h=300_000),
+            provenance=Provenance(kind=SourceKind.SLIDE),
+            shape={"preset": "rect"},
+        )
+    )
+    found = template_fidelity.recurring_elements(slide, spec)
+    assert any(i.check_id == "template.recurring_element_moved" for i in found)
+
+
+def test_empty_slide_is_caught(clean, tmp_path):
+    """Слайд без содержания: считается по собранному файлу, а не по IR."""
+    from pptx import Presentation
+
+    presentation = Presentation(str(clean.pptx))
+    for slide in presentation.slides:
+        for shape in list(slide.shapes):
+            shape._element.getparent().remove(shape._element)
+    bare = tmp_path / "bare.pptx"
+    presentation.save(str(bare))
+
+    found = content_checks.fill_ratio(bare, clean.deck)
+    assert found and found[0].check_id == "density.slide_too_empty"
+
+
+def test_broken_package_is_caught(clean, tmp_path):
+    """Битая связь: LibreOffice о ней молчит, PowerPoint требует восстановления.
+
+    Ломаем так же, как это происходит по-настоящему: фигура с картинкой
+    ссылается на связь, которой нет. Так выглядит клонирование без переноса
+    rel'ов — структурно файл цел, а картинки нет.
+    """
+    import copy
+
+    from pptx import Presentation
+
+    presentation = Presentation(str(clean.pptx))
+    picture = None
+    donor = None
+    for slide in presentation.slides:
+        for shape in slide.shapes:
+            if shape.shape_type == 13:
+                picture, donor = shape, slide
+                break
+        if picture is not None:
+            break
+    if picture is None:
+        pytest.skip("в колоде нет картинок — нечем ломать")
+
+    # Ссылка, которой заведомо нет ни на одном слайде: копирование фигуры
+    # само по себе может «повезти» и попасть в существующий идентификатор.
+    stray = copy.deepcopy(picture._element)
+    for node in stray.iter():
+        for attr in list(node.attrib):
+            if attr.endswith("}embed") or attr.endswith("}link"):
+                node.set(attr, "rIdЗаведомоНетТакой")
+    donor.shapes._spTree.append(stray)
+    broken = tmp_path / "broken.pptx"
+    presentation.save(str(broken))
+
+    found = content_checks.package(broken)
+    assert any(i.check_id == "integrity.package_broken" for i in found)
+
+
+def test_slide_that_is_one_picture_is_caught(clean, tmp_path):
+    """Слайд-картинка ТЗ не засчитывает."""
+    from pptx import Presentation
+    from pptx.util import Emu
+
+    presentation = Presentation(str(clean.pptx))
+    picture = None
+    for slide in presentation.slides:
+        for shape in slide.shapes:
+            if shape.shape_type == 13:
+                picture = shape.image.blob
+                break
+        if picture:
+            break
+    if picture is None:
+        pytest.skip("в колоде нет картинок")
+
+    import io
+
+    slide = presentation.slides[0]
+    for shape in list(slide.shapes):
+        shape._element.getparent().remove(shape._element)
+    slide.shapes.add_picture(io.BytesIO(picture), Emu(0), Emu(0), Emu(1_000_000), Emu(1_000_000))
+    single = tmp_path / "single.pptx"
+    presentation.save(str(single))
+
+    found = content_checks.package(single)
+    assert any(i.check_id == "integrity.slide_is_single_image" for i in found)
+
+
+def test_cited_figure_that_is_not_in_sources_is_caught(clean, pack):
+    """Цитируемое число сверяется с фактом, а не принимается на веру."""
+    from deckwright.schemas import Figure, FigureKind
+
+    plan = clean.plan.model_copy(deep=True)
+    fact = next((f for f in pack.facts if f.value is not None), None)
+    if fact is None:
+        pytest.skip("в пакете нет числовых фактов")
+    plan.slides[0].figures = [
+        Figure(text="1234567", kind=FigureKind.CITED, fact_ids=[fact.id])
+    ]
+    found = content_checks.figures(plan, pack)
+    assert any(i.check_id == "content.figure_not_in_sources" for i in found)
+
+
+def test_unknown_layout_is_caught(clean):
+    slide = clean.deck.slides[0]
+    original = slide.layout_id
+    slide.layout_id = "master9/layout99"
+    try:
+        found = template_fidelity.layout_reference(slide, clean.spec)
+        assert found and found[0].check_id == "template.unknown_layout"
+    finally:
+        slide.layout_id = original
+
+
+def test_too_many_bullets_is_caught(clean):
+    slide, element = _first_text_element(clean.deck)
+    original = list(element.text.paragraphs)
+    element.text.paragraphs = [
+        original[0].model_copy(update={"bullet": True, "text": f"пункт {i}"})
+        for i in range(12)
+    ]
+    try:
+        found = content_checks.density(slide, max_bullets=6, max_words=15)
+        assert any(i.check_id == "density.too_many_bullets" for i in found)
+    finally:
+        element.text.paragraphs = original
+
+
+def test_long_bullet_is_caught(clean):
+    slide, element = _first_text_element(clean.deck)
+    original = list(element.text.paragraphs)
+    element.text.paragraphs = [
+        original[0].model_copy(update={"text": " ".join(["слово"] * 30)})
+    ]
+    try:
+        found = content_checks.density(slide, max_bullets=6, max_words=15)
+        assert any(i.check_id == "density.bullet_too_long" for i in found)
+    finally:
+        element.text.paragraphs = original
+
+
+def test_duplicate_slides_are_caught(clean):
+    deck = clean.deck.model_copy(deep=True)
+    if len(deck.slides) < 2:
+        pytest.skip("в колоде один слайд")
+    second = deck.slides[1]
+    first = deck.slides[0]
+    second.elements = [
+        element.model_copy(deep=True, update={"id": f"{element.id}_copy"})
+        for element in first.elements
+    ]
+    found = content_checks.duplicate_slides(deck)
+    assert any(i.check_id == "integrity.duplicate_slides" for i in found)
+
+
+def test_text_overflow_is_caught(clean):
+    slide, element = _first_text_element(clean.deck)
+    original = element.text.truncated
+    element.text.truncated = True
+    try:
+        found = geometry.text_overflow(slide)
+        assert found and found[0].check_id == "layout.text_overflow"
+    finally:
+        element.text.truncated = original
+
+
+def test_wrong_derived_figure_is_caught(clean, pack):
+    """Производное число пересчитывается, а не принимается на веру."""
+    from deckwright.schemas import Figure, FigureKind
+
+    plan = clean.plan.model_copy(deep=True)
+    fact = next((f for f in pack.facts if f.value is not None), None)
+    if fact is None:
+        pytest.skip("в пакете нет числовых фактов")
+    plan.slides[0].figures = [
+        Figure(text="999", kind=FigureKind.DERIVED, fact_ids=[fact.id], formula=f"{fact.id} * 2")
+    ]
+    found = content_checks.figures(plan, pack)
+    assert any(i.check_id == "content.derived_figure_wrong" for i in found)
+
+
+# ── Фиксеры ──────────────────────────────────────────────────────────────────
+
+
+def test_automatic_fix_moves_the_element_back_inside(clean):
+    deck = clean.deck.model_copy(deep=True)
+    slide = deck.slides[0]
+    element = next(e for e in slide.all_elements() if e.text is not None)
+    element.box = Box(x=deck.slide_width_emu, y=0, w=element.box.w, h=element.box.h)
+
+    issues = geometry.out_of_bounds(slide, deck)
+    outcome = fixers.apply(deck, issues, clean.spec)
+
+    assert outcome.applied, "автоматическое исправление не применилось"
+    assert element.box.right <= deck.slide_width_emu
+    assert geometry.out_of_bounds(slide, deck) == []
+    assert slide.index in outcome.changed_slides
+
+
+def test_assisted_findings_are_left_to_the_human(clean):
+    """Пользователь выбирает, что исправить: сокращать текст за него нельзя."""
+    deck = clean.deck.model_copy(deep=True)
+    slide, element = _first_text_element(deck)
+    element.text.truncated = True
+    issues = geometry.text_overflow(slide)
+    outcome = fixers.apply(deck, issues, clean.spec)
+    assert not outcome.applied
+    assert outcome.skipped["layout.text_overflow"] == "требует решения человека"
+
+
+# ── Контекстный проход ───────────────────────────────────────────────────────
+
+
+def test_contextual_yes_produces_nothing_and_no_produces_a_finding():
+    """Ответ «да» — не находка. Ответ «нет» — находка с уверенностью модели."""
+    from deckwright.audit.contextual.runner import _to_issue
+
+    assert _to_issue(Answer(check_id="content.has_content", passed=True), 1) is None
+
+    issue = _to_issue(
+        Answer(
+            check_id="content.has_content",
+            passed=False,
+            reason="на слайде только заголовок",
+            confidence=0.7,
+        ),
+        3,
+    )
+    assert issue is not None
+    assert issue.kind is CheckKind.CONTEXTUAL
+    assert issue.confidence == 0.7
+    assert issue.fix.kind is FixKind.ASSISTED
+
+
+def test_contextual_answer_about_an_unknown_check_is_ignored():
+    """Модель может назвать вопрос, которого нет. Выдумывать под него паспорт нельзя."""
+    from deckwright.audit.contextual.runner import _to_issue
+
+    assert _to_issue(Answer(check_id="content.выдумка", passed=False), 1) is None
+
+
+def test_contextual_pass_is_skipped_loudly_without_a_model(clean, pack):
+    cfg = load_config(CONFIG)
+    report = audit_deck(
+        clean.deck, clean.spec, clean.plan, pack, cfg,
+        pptx_path=clean.pptx, pages=None, client=None,
+    )
+    assert report.skipped_checks
+    assert all("картин" in reason or "модел" in reason for reason in report.skipped_checks.values())
+
+
+def test_every_deterministic_check_has_both_tests():
+    """Готовность фазы: на каждую детерминированную проверку позитив и негатив.
+
+    Позитив общий — «чистая колода без ошибок»; негатив обязан быть свой у
+    каждой. Проверка, которая всегда молчит, позитивный тест проходит идеально.
+    """
+    source = Path(__file__).read_text("utf-8")
+    missing = [
+        check_id
+        for check_id in deterministic_ids()
+        if f'"{check_id}"' not in source
+    ]
+    assert not missing, f"нет негативного теста на: {missing}"
+
+
+def test_slide_answers_schema_survives_a_terse_model():
+    """Модель имеет право ответить коротко; схема не должна на этом падать."""
+    parsed = SlideAnswers.model_validate(
+        {"answers": [{"check_id": "content.has_content", "passed": True}]}
+    )
+    assert parsed.answers[0].confidence == 0.5

@@ -1,0 +1,72 @@
+"""Сборка отчёта аудита: детерминированные проверки плюс контекстные.
+
+Отчёт обязан быть честным в обе стороны. Находка — это найденная проблема, а
+`skipped_checks` — проверка, которая **не выполнялась**, и почему. Пустой
+список находок при недоступной модели означал бы «всё хорошо», хотя половина
+вопросов даже не была задана.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from deckwright.audit.contextual import runner as contextual
+from deckwright.audit.deterministic import content as content_checks
+from deckwright.audit.deterministic import geometry, template_fidelity
+from deckwright.audit.registry import CHECKS, contextual_ids
+from deckwright.schemas import AuditReport, DeckIR, DeckPlan, Severity, TemplateSpec
+
+
+def audit_deck(
+    deck: DeckIR,
+    spec: TemplateSpec,
+    plan: DeckPlan,
+    pack,
+    cfg,
+    pptx_path: str | Path | None = None,
+    pages: list[Path] | None = None,
+    client=None,
+    only_slides: set[int] | None = None,
+    prompts_dir: str | Path | None = None,
+) -> AuditReport:
+    """Полный аудит одного варианта колоды."""
+    issues = []
+    issues.extend(geometry.run(deck, spec))
+    issues.extend(template_fidelity.run(deck, spec))
+    issues.extend(
+        content_checks.run(
+            deck,
+            plan,
+            pack,
+            pptx_path,
+            max_bullets=cfg.audit.max_bullets_per_slide,
+            max_words=cfg.audit.max_words_per_bullet,
+            min_fill=getattr(cfg.audit, "min_fill_ratio", content_checks.MIN_FILL_RATIO),
+        )
+    )
+
+    skipped: dict[str, str] = {}
+    if pages is None:
+        for check_id in contextual_ids():
+            skipped[check_id] = "картинок слайдов нет: контекстный проход не запускался"
+    else:
+        outcome = contextual.run(
+            deck, plan, pages, client, cfg, only_slides, prompts_dir
+        )
+        issues.extend(outcome.issues)
+        skipped.update(outcome.skipped)
+
+    # Порядок находок — от серьёзных к мелким и по слайдам: так их читает
+    # человек, и так же их покажет интерфейс.
+    order = {Severity.ERROR: 0, Severity.WARNING: 1, Severity.INFO: 2}
+    issues.sort(key=lambda issue: (order[issue.severity], issue.slide_index, issue.check_id))
+
+    return AuditReport(variant=deck.variant, issues=issues, skipped_checks=skipped)
+
+
+def coverage() -> dict[str, int]:
+    """Сколько проверок какого рода объявлено. Нужно `docs/AUDIT.md` и тесту."""
+    counts: dict[str, int] = {}
+    for item in CHECKS:
+        counts[item.kind.value] = counts.get(item.kind.value, 0) + 1
+    return counts
