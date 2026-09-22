@@ -1,0 +1,350 @@
+"""Цикл «аудит → исправление → пересборка»: кто принимает решение.
+
+ТЗ требует, чтобы выбирал пользователь. Значит проверять надо не только то,
+что исправление применяется, но и то, что **не применяется** без выбора:
+режим, который чинит всё подряд, проходит тест «стало лучше» и нарушает A16.
+"""
+
+from __future__ import annotations
+
+import copy
+import json
+import sys
+from pathlib import Path
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).parent / "fixtures"))
+
+from deckwright.audit import rewrite as rewrite_step
+from deckwright.config import load_config
+from deckwright.llm.fake import RecordedClient
+from deckwright.pipeline import apply_selection, run_variant
+from deckwright.schemas import (
+    Box,
+    CheckKind,
+    ContentPack,
+    FixKind,
+    Issue,
+    IssueCategory,
+    ProposedFix,
+    Severity,
+)
+
+CONFIG = "configs/config.yaml"
+
+
+@pytest.fixture(scope="module")
+def pack(content_pack_path):
+    return ContentPack.model_validate(json.loads(content_pack_path.read_text("utf-8")))
+
+
+def _run(template, pack, recorded_dir, output_dir, fix_mode, cfg=None):
+    return run_variant(
+        template_path=template,
+        pack=pack,
+        cfg=cfg or load_config(CONFIG),
+        client=RecordedClient(recorded_dir),
+        variant="balanced",
+        output_dir=output_dir,
+        fix_mode=fix_mode,
+    )
+
+
+@pytest.fixture(scope="module")
+def reviewed(template_paths, pack, recorded_dir, tmp_path_factory):
+    """Прогон в режиме review: колода собрана, отчёт есть, правок не было."""
+    return _run(
+        template_paths[0], pack, recorded_dir, tmp_path_factory.mktemp("review"), "review"
+    )
+
+
+def _stub(result, issues, deck=None):
+    """Копия результата прогона с подменённым отчётом.
+
+    Копия, а не правка на месте: `reviewed` — общая фикстура модуля, и тест,
+    который её портит, ломает соседние.
+    """
+    stub = copy.copy(result)
+    stub.audit = result.audit.model_copy(deep=True)
+    stub.audit.issues = list(issues)
+    if deck is not None:
+        stub.deck = deck
+    return stub
+
+
+# ── Режим review: решение остаётся человеку ──────────────────────────────────
+
+
+def test_review_mode_changes_nothing(reviewed):
+    """A16: без выбора пользователя прогон колоду не правит.
+
+    Отчёт при этом обязан быть — иначе выбирать не из чего.
+    """
+    assert reviewed.manifest.fix_mode == "review"
+    assert reviewed.manifest.fix_iterations == []
+    assert reviewed.audit is not None
+
+
+def test_every_issue_has_a_selection_key(reviewed):
+    """Выбор идёт по ключу находки: без него UI нечего передать обратно."""
+    for issue in reviewed.audit.issues:
+        assert issue.key.startswith(f"{issue.slide_index}:")
+        assert issue.check_id in issue.key
+
+
+# ── Режим auto: только AUTOMATIC, и не молча ─────────────────────────────────
+
+
+def test_auto_mode_touches_only_automatic_fixes(
+    template_paths, pack, recorded_dir, tmp_path_factory
+):
+    """Автоматический режим не имеет права применять ASSISTED и контекстные.
+
+    Проверяется по протоколу итераций, а не по итоговому отчёту: находка может
+    исчезнуть и сама, а вот запись «применено» — это именно решение прогона.
+    """
+    result = _run(
+        template_paths[0], pack, recorded_dir, tmp_path_factory.mktemp("auto"), "auto"
+    )
+    applied = {key for record in result.manifest.fix_iterations for key in record.applied}
+    by_key = {issue.key: issue for issue in result.audit.issues}
+    for key in applied:
+        issue = by_key.get(key)
+        if issue is None:  # находка исчезла — она и была починена
+            continue
+        assert issue.fix.kind is FixKind.AUTOMATIC, key
+
+
+def test_auto_mode_records_what_it_did(template_paths, pack, recorded_dir, tmp_path_factory):
+    """Прогон, изменивший колоду, обязан отчитаться в манифесте (A19)."""
+    result = _run(
+        template_paths[0], pack, recorded_dir, tmp_path_factory.mktemp("auto2"), "auto"
+    )
+    manifest = result.manifest
+    assert manifest.fix_mode == "auto"
+    assert len(manifest.fix_iterations) <= manifest_limit()
+    for record in manifest.fix_iterations:
+        assert record.seconds >= 0
+        assert record.issues_before >= record.issues_after or record.rewritten_slides
+
+
+def manifest_limit() -> int:
+    return load_config(CONFIG).run.max_fix_iterations
+
+
+# ── Явный выбор ──────────────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def damaged(reviewed, pack):
+    """Колода с элементом, вынесенным за край, и её настоящий отчёт.
+
+    Находка берётся из аудита, а не пишется руками: иначе тест проверял бы
+    свою же выдумку, а не то, что цикл чинит реальные находки.
+    """
+    from deckwright.audit.report import audit_deck
+    from deckwright.schemas import Box
+
+    deck = reviewed.deck.model_copy(deep=True)
+    element = deck.slides[0].elements[0]
+    element.box = Box(
+        x=deck.slide_width_emu + 10_000, y=element.box.y, w=element.box.w, h=element.box.h
+    )
+    report = audit_deck(
+        deck,
+        reviewed.spec,
+        reviewed.plan,
+        pack,
+        load_config(CONFIG),
+        pptx_path=reviewed.pptx,
+        pages=None,
+    )
+    out_of_bounds = [
+        issue for issue in report.issues if issue.check_id == "layout.out_of_bounds"
+    ]
+    assert out_of_bounds, "проверка выхода за границы не сработала на порче"
+    return _stub(reviewed, report.issues, deck=deck), out_of_bounds[0]
+
+
+def test_selection_applies_only_what_was_chosen(damaged):
+    """Выбрана одна находка — применяется ровно она."""
+    stub, issue = damaged
+    after = apply_selection(stub, {issue.key})
+    applied = {key for record in after.manifest.fix_iterations for key in record.applied}
+    assert applied and applied <= {issue.key}
+    assert after.manifest.fix_mode == "selected"
+
+
+def test_selected_fix_is_applied_and_deck_rebuilt(damaged):
+    """A16: исправление применяется, колода пересобирается, находка уходит."""
+    stub, issue = damaged
+    after = apply_selection(stub, {issue.key})
+
+    element = after.deck.slides[0].elements[0]
+    assert element.box.x + element.box.w <= after.deck.slide_width_emu
+
+    assert after.pptx.exists() and after.pdf.exists() and after.pages
+    remaining = [
+        found for found in after.audit.issues if found.check_id == "layout.out_of_bounds"
+    ]
+    assert not remaining, "находка осталась после применения её же исправления"
+
+
+def test_unchosen_finding_survives(damaged):
+    """Не отмеченная находка остаётся нетронутой, даже если чинится сама."""
+    stub, issue = damaged
+    others = [
+        found
+        for found in stub.audit.auto_fixable
+        if found.key != issue.key and found.slide_index != issue.slide_index
+    ]
+    after = apply_selection(stub, set())
+    applied = [key for record in after.manifest.fix_iterations for key in record.applied]
+    assert applied == []
+    assert len(after.audit.issues) >= len(others)
+
+
+def test_contextual_finding_is_never_applied(reviewed):
+    """Контекстную находку применять нечем: у неё только показ.
+
+    Даже явный выбор не должен превращаться в правку колоды — ответ модели на
+    повторе может отличаться.
+    """
+    contextual = Issue(
+        check_id="content.has_content",
+        kind=CheckKind.CONTEXTUAL,
+        category=IssueCategory.CONTENT,
+        severity=Severity.WARNING,
+        slide_index=1,
+        confidence=0.7,
+        message="на слайде нет содержания",
+        fix=ProposedFix(
+            kind=FixKind.ASSISTED,
+            description="решение за человеком",
+            action="review_contextual_finding",
+            params={"check_id": "content.has_content", "slide_index": 1},
+        ),
+    )
+    after = apply_selection(_stub(reviewed, [contextual]), {contextual.key})
+    applied = [key for record in after.manifest.fix_iterations for key in record.applied]
+    assert applied == []
+
+
+def test_assisted_without_rewrite_flag_stays_a_note(reviewed):
+    """Без `run.rewrite_assisted` выбранная ASSISTED остаётся пометкой.
+
+    Это не вторая ветка поведения, а отсутствие шага: прогон не идёт в модель
+    и не выдумывает за автора, что сократить.
+    """
+    overflow = Issue(
+        check_id="layout.text_overflow",
+        kind=CheckKind.DETERMINISTIC,
+        category=IssueCategory.LAYOUT,
+        severity=Severity.WARNING,
+        slide_index=2,
+        element_ids=["e1"],
+        bbox=Box(x=0, y=0, w=100, h=100),
+        message="e1: текст не помещается в рамку",
+        fix=ProposedFix(
+            kind=FixKind.ASSISTED,
+            description="сократить текст",
+            action="shorten_or_split",
+            params={"element_id": "e1"},
+        ),
+    )
+    stub = _stub(reviewed, [overflow])
+    assert stub.context.cfg.run.rewrite_assisted is False
+
+    after = apply_selection(stub, {overflow.key})
+    reasons = [
+        reason
+        for record in after.manifest.fix_iterations
+        for reason in record.skipped.values()
+    ]
+    assert after.manifest.fix_iterations, "итерация должна быть записана"
+    assert any("редактирования" in reason for reason in reasons), reasons
+
+
+# ── Переписывание моделью: рамки, а не доверие ───────────────────────────────
+
+
+def test_rewrite_rejects_invented_numbers():
+    """Новое число в переписанном тексте означает потерю происхождения факта."""
+    from fixtures import deck_plan
+
+    plan = deck_plan()
+    slide = plan.slides[1]
+    answer = rewrite_step.RewrittenSlide(
+        takeaway_title="Выручка выросла на 47 % за квартал"
+    )
+    problem = rewrite_step._check(slide, answer, budget=None)
+    assert problem is not None and "47" in problem
+
+
+def test_rewrite_rejects_text_over_budget():
+    """Текст, снова не влезающий в рамку, закрутил бы цикл на том же месте."""
+    from deckwright.plan.budget import LengthBudget
+    from fixtures import deck_plan
+
+    plan = deck_plan()
+    budget = LengthBudget(
+        title_chars=20,
+        subtitle_chars=40,
+        bullet_chars=60,
+        max_bullets=3,
+        max_words_per_bullet=10,
+        measured_with="тест",
+    )
+    answer = rewrite_step.RewrittenSlide(
+        takeaway_title="Выручка выросла на 34 % за квартал, и это только начало"
+    )
+    problem = rewrite_step._check(plan.slides[1], answer, budget)
+    assert problem is not None and "бюджете" in problem
+
+
+def test_rewrite_keeps_block_composition():
+    """Модель не имеет права заводить блоки: их состав решает вёрстка."""
+    from fixtures import deck_plan
+
+    plan = deck_plan()
+    answer = rewrite_step.RewrittenSlide(
+        takeaway_title="Выручка выросла на 34 %",
+        blocks=[rewrite_step.RewrittenBlock(id="b-выдуманный", items=["пункт"])],
+    )
+    problem = rewrite_step._check(plan.slides[1], answer, budget=None)
+    assert problem is not None and "b-выдуманный" in problem
+
+
+def test_rewrite_applies_accepted_text():
+    """Принятая правка меняет план, а не представление вёрстки."""
+    from fixtures import deck_plan
+
+    plan = deck_plan()
+    issue = Issue(
+        check_id="density.bullet_too_long",
+        kind=CheckKind.DETERMINISTIC,
+        category=IssueCategory.DENSITY,
+        severity=Severity.WARNING,
+        slide_index=2,
+        element_ids=["b1"],
+        message="слишком длинный пункт",
+        fix=ProposedFix(
+            kind=FixKind.ASSISTED,
+            description="сократить формулировку",
+            action="shorten_paragraph",
+            params={"element_id": "b1", "paragraph": 0},
+        ),
+    )
+
+    class Client:
+        mocked = True
+
+        def complete(self, step, prompt, schema, images=None):
+            return schema.model_validate({"takeaway_title": "Выручка выросла на 34 %"})
+
+    outcome = rewrite_step.rewrite(plan, [issue], Client())
+    assert outcome.rewritten == [2]
+    assert outcome.plan.slides[1].takeaway_title == "Выручка выросла на 34 %"
+    # Исходный план не тронут: правка возвращается копией.
+    assert plan.slides[1].takeaway_title == "Выручка выросла на 34 % за квартал"

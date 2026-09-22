@@ -45,6 +45,7 @@ from deckwright.schemas.issue import (
     Severity,
 )
 from deckwright.schemas.manifest import (
+    FixIteration,
     FontSubstitution,
     ModelUsage,
     PromptVersion,
@@ -103,6 +104,7 @@ __all__ = [
     "Fact",
     "Figure",
     "FigureKind",
+    "FixIteration",
     "FixKind",
     "FontSubstitution",
     "FontToken",

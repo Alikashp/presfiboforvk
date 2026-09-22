@@ -90,6 +90,18 @@ class Issue(BaseModel):
     # Уверенность модели. Для детерминированной проверки всегда 1.0.
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
 
+    @property
+    def key(self) -> str:
+        """Устойчивое имя находки: по нему её выбирает пользователь.
+
+        Идентификатора у находки нет и быть не может: она не хранится между
+        прогонами, а вычисляется заново. Ключ собирается из того, что
+        воспроизводится при повторном аудите той же колоды, — номера слайда,
+        проверки и элемента, которого она касается.
+        """
+        element = self.element_ids[0] if self.element_ids else ""
+        return f"{self.slide_index}:{self.check_id}:{element}"
+
     @model_validator(mode="after")
     def _deterministic_is_certain(self) -> Issue:
         if self.kind is CheckKind.DETERMINISTIC and self.confidence != 1.0:
@@ -119,3 +131,13 @@ class AuditReport(BaseModel):
     @property
     def auto_fixable(self) -> list[Issue]:
         return [i for i in self.issues if i.fix.kind is FixKind.AUTOMATIC]
+
+    @property
+    def assisted(self) -> list[Issue]:
+        """Находки, которые применяются только по явному выбору человека."""
+        return [i for i in self.issues if i.fix.kind is FixKind.ASSISTED]
+
+    def select(self, keys: set[str]) -> list[Issue]:
+        """Находки по ключам выбора. Незнакомый ключ молча игнорируется:
+        отчёт мог быть пересобран, и находки в нём уже другие."""
+        return [i for i in self.issues if i.key in keys]

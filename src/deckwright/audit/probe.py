@@ -264,7 +264,15 @@ def format_report(
             f"время на слайд       : мин {times[0]:.1f}  "
             f"медиана {times[len(times) // 2]:.1f}  макс {times[-1]:.1f} с"
         )
-        lines.append(f"вся колода           : {clean.total_seconds:.1f} с")
+        # Проба спрашивает слайды подряд, а пайплайн — параллельно, восемью
+        # вызовами. Назвать эту сумму «всей колодой» значит выдать худший
+        # случай за время прогона: прогон делит её на число потоков, пока
+        # хватает минутного лимита по токенам.
+        lines.append(
+            f"сумма по {len(clean.slides)} слайдам : {clean.total_seconds:.1f} с "
+            "(последовательно; в прогоне вызовы идут параллельно, "
+            "см. vlm.max_concurrent_calls)"
+        )
         lines.append(
             f"токенов              : вход {clean.total_prompt_tokens}, "
             f"выход {clean.total_completion_tokens}"
