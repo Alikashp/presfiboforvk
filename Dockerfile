@@ -30,6 +30,5 @@ RUN mkdir -p /app/outputs /app/.cache/templates /app/.cache/fonts
 RUN deckwright doctor
 
 EXPOSE 8501
-# Веб-интерфейс — фаза 11; пока точка входа — проверка окружения.
-# Тогда заменяется на: streamlit run app/ui.py --server.address=0.0.0.0
-CMD ["deckwright", "doctor"]
+CMD ["streamlit", "run", "app/ui.py", \
+     "--server.address=0.0.0.0", "--server.port=8501", "--server.headless=true"]

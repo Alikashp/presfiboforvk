@@ -50,6 +50,7 @@ from deckwright.schemas.manifest import (
     ModelUsage,
     PromptVersion,
     RunManifest,
+    RunSummary,
     StageTiming,
 )
 from deckwright.schemas.slide_ir import (
@@ -125,6 +126,7 @@ __all__ = [
     "RecurringElement",
     "Repeater",
     "RunManifest",
+    "RunSummary",
     "Series",
     "Severity",
     "ShapeContent",

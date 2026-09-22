@@ -25,6 +25,7 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -138,6 +139,8 @@ class _RunContext:
     # Находки текстового прохода: он идёт по плану, а план у вариантов один.
     # Заполняется после первого аудита и переезжает в следующий вариант.
     text_findings: list[Issue] | None = None
+    # Куда сообщать о начале этапа. Нужно интерфейсу: прогон идёт минуты.
+    on_stage: Callable[[str], None] | None = None
 
 
 def _step_params(model_cfg, steps: tuple[str, ...]) -> dict[str, dict[str, object]]:
@@ -146,7 +149,12 @@ def _step_params(model_cfg, steps: tuple[str, ...]) -> dict[str, dict[str, objec
 
 
 @contextmanager
-def _timed(manifest: RunManifest, stage: str):
+def _timed(manifest: RunManifest, stage: str, on_stage: Callable[[str], None] | None = None):
+    """Замер этапа. `on_stage` зовётся в начале — интерфейсу нужно «идёт», а
+    не «закончилось»: прогон занимает минуты, и молчащая страница выглядит
+    зависшей."""
+    if on_stage is not None:
+        on_stage(stage)
     started = time.monotonic()
     try:
         yield
@@ -214,12 +222,12 @@ def _build(
     output_dir = ctx.output_dir
     stem = ctx.stem
 
-    with _timed(manifest, "render_pptx"):
+    with _timed(manifest, "render_pptx", ctx.on_stage):
         pptx_path = render_deck(deck, spec, template_path, output_dir / f"{stem}.pptx")
 
     # Целостность пакета проверяется здесь, а не в тестах: LibreOffice о битых
     # ссылках молчит, и без этой проверки поломка доедет до PowerPoint.
-    with _timed(manifest, "verify_package"):
+    with _timed(manifest, "verify_package", ctx.on_stage):
         check_package(pptx_path).raise_if_broken(pptx_path)
         single_image = slide_is_single_image(pptx_path)
         if single_image:
@@ -227,7 +235,7 @@ def _build(
                 f"слайды {single_image} состоят из одной картинки — ТЗ такое не засчитывает"
             )
 
-    with _timed(manifest, "render_pdf"):
+    with _timed(manifest, "render_pdf", ctx.on_stage):
         pdf_path = pptx_to_pdf(
             pptx_path,
             output_dir,
@@ -235,7 +243,7 @@ def _build(
             timeout_seconds=cfg.render.soffice_timeout_seconds,
         )
 
-    with _timed(manifest, "render_png"):
+    with _timed(manifest, "render_png", ctx.on_stage):
         # Растеризация — самая дорогая часть пересборки (18 с из 20 на колоде
         # holdout), а итерация цикла трогает два-три слайда. Перерисовываются
         # только их страницы: остальные страницы нового `.pdf` побайтово те
@@ -249,7 +257,7 @@ def _build(
             only_pages=only_slides,
         )
 
-    with _timed(manifest, "render_html"):
+    with _timed(manifest, "render_html", ctx.on_stage):
         html_path = export_html(
             deck,
             output_dir / f"{stem}.html",
@@ -266,7 +274,7 @@ def _build(
             f"страниц в PDF {len(pages)}, а слайдов в колоде {len(deck.slides)}"
         )
 
-    with _timed(manifest, "audit"):
+    with _timed(manifest, "audit", ctx.on_stage):
         report = audit_deck(
             deck,
             spec,
@@ -494,6 +502,7 @@ def run_variant(
     fix_mode: str | None = None,
     prepared: PreparedPlan | None = None,
     text_findings: list[Issue] | None = None,
+    on_stage: Callable[[str], None] | None = None,
 ) -> PipelineResult:
     """Прогоняет один вариант вёрстки от шаблона до аудита.
 
@@ -526,7 +535,7 @@ def run_variant(
         fix_mode=mode,
     )
 
-    with _timed(manifest, "parse"):
+    with _timed(manifest, "parse", on_stage):
         # Кэш по хэшу файла: три варианта вёрстки разбирают один и тот же
         # шаблон, а разбор колоды на полсотни слайдов занимает секунды.
         spec = parse_template(
@@ -563,7 +572,7 @@ def run_variant(
     )
 
     slide_count = cfg.deck.slide_count or cfg.deck.min_slides
-    with _timed(manifest, "plan"):
+    with _timed(manifest, "plan", on_stage):
         if prepared is not None:
             plan, prompt, budget = prepared.plan, prepared.prompt, prepared.budget
         else:
@@ -605,7 +614,7 @@ def run_variant(
         )
     )
 
-    with _timed(manifest, "layout"):
+    with _timed(manifest, "layout", on_stage):
         # Вариант передаётся пресетом, а не именем: плотность, предпочтение
         # композиций и поведение при переполнении — это он и есть.
         try:
@@ -629,6 +638,7 @@ def run_variant(
         budget=budget,
         vlm_client=vlm_client,
         text_findings=text_findings,
+        on_stage=on_stage,
     )
     built = _build(deck, plan, spec, pack, ctx, manifest, template_path)
 

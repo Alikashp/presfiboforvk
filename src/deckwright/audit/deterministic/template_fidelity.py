@@ -133,8 +133,12 @@ def colors(slide: SlideIR, spec: TemplateSpec) -> list[Issue]:
     return found
 
 
-def contrast(slide: SlideIR) -> list[Issue]:
-    """Контраст ниже 4.5:1 — это нечитаемый слайд, а не стилистический выбор."""
+def contrast(slide: SlideIR, min_ratio: float = MIN_CONTRAST) -> list[Issue]:
+    """Контраст ниже порога — это нечитаемый слайд, а не стилистический выбор.
+
+    Порог приходит из конфига (`audit.contrast_min_ratio`); умолчание — 4.5:1
+    по WCAG AA для основного текста.
+    """
     if slide.background is None:
         return []
     found: list[Issue] = []
@@ -143,13 +147,13 @@ def contrast(slide: SlideIR) -> list[Issue]:
             continue
         for paragraph in element.text.paragraphs:
             ratio = paragraph.style.color.contrast_ratio(slide.background)
-            if ratio >= MIN_CONTRAST:
+            if ratio >= min_ratio:
                 continue
             found.append(
                 _issue(
                     "template.low_contrast",
                     slide.index,
-                    f"{element.id}: контраст {ratio:.2f} при пороге {MIN_CONTRAST}",
+                    f"{element.id}: контраст {ratio:.2f} при пороге {min_ratio}",
                     element_ids=[element.id],
                     bbox=element.box,
                 )
@@ -219,12 +223,14 @@ def recurring_elements(slide: SlideIR, spec: TemplateSpec) -> list[Issue]:
     return found
 
 
-def run(deck: DeckIR, spec: TemplateSpec) -> list[Issue]:
+def run(
+    deck: DeckIR, spec: TemplateSpec, min_contrast: float = MIN_CONTRAST
+) -> list[Issue]:
     found: list[Issue] = []
     for slide in deck.slides:
         found.extend(fonts_and_sizes(slide, spec))
         found.extend(colors(slide, spec))
-        found.extend(contrast(slide))
+        found.extend(contrast(slide, min_contrast))
         found.extend(layout_reference(slide, spec))
         found.extend(recurring_elements(slide, spec))
     return found

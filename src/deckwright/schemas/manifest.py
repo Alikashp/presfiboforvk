@@ -96,6 +96,37 @@ class FontSubstitution(BaseModel):
     reason: str
 
 
+class RunSummary(BaseModel):
+    """Прогон целиком: сколько заняли все варианты вместе.
+
+    Бюджет пяти минут ТЗ считает на одну презентацию, и его держит
+    `RunManifest.within_budget` по каждому варианту. Но на демонстрации три
+    варианта запускаются разом, и общее время видно зрителю — значит оно
+    обязано быть измерено и записано, а не оценено на глаз.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    run_id: str
+    template_name: str
+    started_at: datetime
+    finished_at: datetime
+    # {вариант: секунды по его собственному манифесту}
+    variant_seconds: dict[str, float] = Field(default_factory=dict)
+    # Время от запуска до последнего артефакта, включая всё между вариантами.
+    total_seconds: float = Field(ge=0)
+    budget_seconds_per_deck: int = Field(gt=0)
+
+    @property
+    def slowest_variant(self) -> float:
+        return max(self.variant_seconds.values(), default=0.0)
+
+    @property
+    def every_deck_within_budget(self) -> bool:
+        """Критерий A18: бюджет на одну презентацию, а не на прогон."""
+        return self.slowest_variant <= self.budget_seconds_per_deck
+
+
 class RunManifest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
