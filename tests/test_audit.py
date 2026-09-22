@@ -636,3 +636,31 @@ def test_text_pass_is_asked_once_for_the_whole_deck(
     # Картиночный проход, наоборот, обязан идти по каждому варианту: вёрстка
     # у них разная, и видно это только на картинке.
     assert vlm.steps.count("audit_slide") >= 2 * len(result.deck.slides) - 1
+
+
+def test_identical_findings_are_collapsed(clean, pack):
+    """Неотличимые находки схлопываются: иначе по номеру нельзя выбрать.
+
+    Проверка цвета обходит абзацы, и элемент из пяти абзацев одного цвета
+    давал пять находок с одинаковым текстом, рамкой и ключом. В интерфейсе это
+    пять рамок с номером 5 — нашлось живым прогоном страницы, а не рассуждением.
+    """
+    report = audit_deck(
+        clean.deck,
+        clean.spec,
+        clean.plan,
+        pack,
+        load_config(CONFIG),
+        pptx_path=clean.pptx,
+        pages=None,
+    )
+    marks = [
+        (issue.check_id, issue.slide_index, tuple(issue.element_ids), issue.message)
+        for issue in report.issues
+    ]
+    assert len(marks) == len(set(marks)), "в отчёте остались неотличимые находки"
+
+    # Ключ находки обязан быть единственным: по нему человек выбирает, что
+    # чинить, и два одинаковых ключа означают выбор наугад.
+    keys = [issue.key for issue in report.issues]
+    assert len(keys) == len(set(keys)), "ключи находок повторяются"

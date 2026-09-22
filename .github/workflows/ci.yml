@@ -97,5 +97,7 @@ jobs:
       - name: Сборка образа
         run: docker build -t deckwright:ci .
 
+      # Команда задаётся явно: CMD образа поднимает веб-интерфейс и не
+      # завершается, а проверить надо именно окружение внутри образа.
       - name: Запуск проверки окружения в собранном образе
-        run: docker run --rm deckwright:ci
+        run: docker run --rm deckwright:ci deckwright doctor

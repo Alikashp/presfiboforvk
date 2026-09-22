@@ -5,6 +5,8 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
+from datetime import UTC, datetime
 from pathlib import Path
 from statistics import median
 
@@ -13,7 +15,7 @@ from deckwright.environment import run_checks
 from deckwright.llm.base import StructuredClient
 from deckwright.llm.fake import RecordedClient
 from deckwright.pipeline import run_variant
-from deckwright.schemas import ContentPack
+from deckwright.schemas import ContentPack, RunSummary
 
 DEFAULT_CONFIG = Path("configs/config.yaml")
 
@@ -93,6 +95,13 @@ def _cmd_run(args: argparse.Namespace) -> int:
     # (по замеру 34 с на вызов).
     prepared = None
     text_findings = None
+    # Время прогона целиком. Бюджет ТЗ — на одну презентацию, и его держит
+    # манифест каждого варианта; но три варианта запускаются разом, и эта
+    # цифра видна зрителю, значит она обязана быть измерена.
+    run_started = time.monotonic()
+    started_at = datetime.now(UTC)
+    run_id = started_at.strftime("run-%Y%m%d-%H%M%S")
+    variant_seconds: dict[str, float] = {}
     for variant in variants:
         result = run_variant(
             template_path=template,
@@ -109,6 +118,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         # Вопросы текстового прохода аудита задаются по плану, а план один на
         # три варианта: опечатки и единый язык от вёрстки не зависят.
         text_findings = result.text_findings
+        variant_seconds[variant] = result.manifest.total_seconds
         manifest = result.manifest
         stages = ", ".join(f"{t.stage} {t.seconds}с" for t in manifest.timings)
         print(
@@ -135,6 +145,26 @@ def _cmd_run(args: argparse.Namespace) -> int:
 
         for warning in manifest.warnings:
             print(f"[{variant}] ⚠ {warning}", file=sys.stderr)
+
+    summary = RunSummary(
+        run_id=run_id,
+        template_name=Path(template).name,
+        started_at=started_at,
+        finished_at=datetime.now(UTC),
+        variant_seconds=variant_seconds,
+        total_seconds=round(time.monotonic() - run_started, 3),
+        budget_seconds_per_deck=cfg.run.time_budget_seconds,
+    )
+    output_root.mkdir(parents=True, exist_ok=True)
+    (output_root / "run-summary.json").write_text(
+        summary.model_dump_json(indent=2), encoding="utf-8"
+    )
+    print(
+        f"[прогон] вариантов {len(variant_seconds)}, всего "
+        f"{summary.total_seconds}с; самая долгая колода "
+        f"{summary.slowest_variant}с из {cfg.run.time_budget_seconds}с "
+        f"({'в бюджете' if summary.every_deck_within_budget else 'ВНЕ БЮДЖЕТА'})"
+    )
     return 0
 
 

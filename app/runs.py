@@ -1,0 +1,173 @@
+"""Фоновые прогоны и их состояние.
+
+Прогон колоды занимает минуты, а Streamlit перезапускает скрипт на каждое
+нажатие. Значит держать прогон в обработчике кнопки нельзя: страница будет
+заблокирована, а обновление её потеряет.
+
+Поэтому прогон живёт в отдельном потоке, а его состояние — в реестре по
+`run_id`. `run_id` уходит в параметры адреса, и после обновления страницы
+интерфейс находит тот же прогон, а не начинает новый.
+
+Реестр модульного уровня, а не `st.session_state`: состояние переживает и
+перезапуск скрипта, и обновление вкладки, пока жив процесс сервера.
+"""
+
+from __future__ import annotations
+
+import threading
+import time
+import traceback
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from pathlib import Path
+
+from deckwright.config import Config
+from deckwright.llm.base import StructuredClient
+from deckwright.pipeline import PipelineResult, apply_selection, run_variant
+from deckwright.schemas import ContentPack
+
+
+@dataclass
+class VariantState:
+    """Что известно про один вариант вёрстки прямо сейчас."""
+
+    name: str
+    stage: str = "ожидает"
+    result: PipelineResult | None = None
+    error: str | None = None
+    # Ключи находок, отмеченных человеком. Живут здесь, а не в форме: форма
+    # пересоздаётся на каждый перезапуск скрипта.
+    selected: set[str] = field(default_factory=set)
+    applying: bool = False
+
+
+@dataclass
+class RunState:
+    """Прогон целиком: три варианта, общий план, общее время."""
+
+    run_id: str
+    template_name: str
+    started_at: datetime
+    variants: dict[str, VariantState] = field(default_factory=dict)
+    finished: bool = False
+    error: str | None = None
+    started_monotonic: float = field(default_factory=time.monotonic)
+
+    @property
+    def elapsed(self) -> float:
+        return round(time.monotonic() - self.started_monotonic, 1)
+
+    @property
+    def done_count(self) -> int:
+        return sum(1 for state in self.variants.values() if state.result is not None)
+
+    def ready(self) -> list[VariantState]:
+        return [state for state in self.variants.values() if state.result is not None]
+
+
+_RUNS: dict[str, RunState] = {}
+_LOCK = threading.Lock()
+
+
+def get(run_id: str) -> RunState | None:
+    with _LOCK:
+        return _RUNS.get(run_id)
+
+
+def latest() -> RunState | None:
+    with _LOCK:
+        if not _RUNS:
+            return None
+        return max(_RUNS.values(), key=lambda state: state.started_at)
+
+
+def start(
+    template_path: str | Path,
+    pack: ContentPack,
+    cfg: Config,
+    client: StructuredClient,
+    variants: list[str],
+    output_root: str | Path,
+    vlm_client: StructuredClient | None = None,
+    fix_mode: str | None = None,
+) -> RunState:
+    """Запускает прогон в фоне и сразу возвращает его состояние."""
+    run_id = datetime.now(UTC).strftime("run-%Y%m%d-%H%M%S-%f")[:-3]
+    state = RunState(
+        run_id=run_id,
+        template_name=Path(template_path).name,
+        started_at=datetime.now(UTC),
+        variants={name: VariantState(name=name) for name in variants},
+    )
+    with _LOCK:
+        _RUNS[run_id] = state
+
+    def work() -> None:
+        # План и находки текстового прохода не зависят от варианта вёрстки:
+        # оба считаются один раз и переезжают дальше.
+        prepared = None
+        text_findings = None
+        try:
+            for name in variants:
+                variant_state = state.variants[name]
+
+                def on_stage(stage: str, target: VariantState = variant_state) -> None:
+                    target.stage = stage
+
+                result = run_variant(
+                    template_path=template_path,
+                    pack=pack,
+                    cfg=cfg,
+                    client=client,
+                    variant=name,
+                    output_dir=Path(output_root) / run_id / name,
+                    run_id=f"{run_id}-{name}",
+                    vlm_client=vlm_client,
+                    fix_mode=fix_mode,
+                    prepared=prepared,
+                    text_findings=text_findings,
+                    on_stage=on_stage,
+                )
+                prepared = result.prepared
+                text_findings = result.text_findings
+                variant_state.result = result
+                variant_state.stage = "готово"
+        except Exception:  # поток не должен умирать молча: иначе страница ждёт вечно
+            state.error = traceback.format_exc(limit=4)
+            for variant_state in state.variants.values():
+                if variant_state.result is None:
+                    variant_state.stage = "прервано"
+        finally:
+            state.finished = True
+
+    threading.Thread(target=work, name=f"deckwright-{run_id}", daemon=True).start()
+    return state
+
+
+def apply(state: RunState, variant: str, client: StructuredClient | None = None) -> None:
+    """Применяет отмеченные находки и пересобирает вариант — тоже в фоне.
+
+    Пересборка занимает секунды, а не минуты, но блокировать ими страницу
+    всё равно нельзя: Streamlit на это время перестанет отвечать.
+    """
+    variant_state = state.variants[variant]
+    if variant_state.result is None or variant_state.applying:
+        return
+    variant_state.applying = True
+    variant_state.stage = "применяю исправления"
+    chosen = set(variant_state.selected)
+
+    def work() -> None:
+        try:
+            variant_state.result = apply_selection(variant_state.result, chosen, client)
+            # Выбор не очищается: его держат галочки интерфейса. Исправленная
+            # находка исчезает из отчёта вместе со своей галочкой, а
+            # оставшаяся отмеченной честно означает, что она осталась.
+            variant_state.stage = "готово"
+        except Exception:
+            variant_state.error = traceback.format_exc(limit=4)
+            variant_state.stage = "ошибка при исправлении"
+        finally:
+            variant_state.applying = False
+
+    threading.Thread(target=work, name=f"deckwright-fix-{variant}", daemon=True).start()

@@ -118,7 +118,7 @@ class RunConfig(BaseModel):
     template: Path | None = None
     content: Path | None = None
     time_budget_seconds: int = Field(default=300, gt=0)
-    max_fix_iterations: int = Field(default=1, ge=0)
+    max_fix_iterations: int = Field(default=2, ge=0)
     # Что прогон делает с находками аудита сам.
     #
     #   review — остановиться с отчётом: выбирает пользователь (умолчание ТЗ);

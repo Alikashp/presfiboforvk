@@ -66,7 +66,38 @@ def audit_deck(
     order = {Severity.ERROR: 0, Severity.WARNING: 1, Severity.INFO: 2}
     issues.sort(key=lambda issue: (order[issue.severity], issue.slide_index, issue.check_id))
 
-    return AuditReport(variant=deck.variant, issues=issues, skipped_checks=skipped)
+    return AuditReport(
+        variant=deck.variant, issues=_without_repeats(issues), skipped_checks=skipped
+    )
+
+
+def _without_repeats(issues: list) -> list:
+    """Схлопывает находки, неотличимые друг от друга.
+
+    Проверка цвета обходит абзацы, и на элементе из пяти абзацев одного цвета
+    она даёт пять находок с одинаковым текстом, одинаковой рамкой и одинаковым
+    ключом. Человеку это пять одинаковых строк, интерфейсу — пять рамок с
+    одним номером: выбрать по номеру нельзя, потому что номер не единственный.
+    Обнаружено при живом прогоне интерфейса, а не рассуждением.
+
+    Схлопывается только полностью совпадающее: текст находки несёт и номер
+    абзаца, и имя элемента, поэтому разные проблемы остаются разными.
+    """
+    seen: set[tuple] = set()
+    unique = []
+    for issue in issues:
+        mark = (
+            issue.check_id,
+            issue.slide_index,
+            tuple(issue.element_ids),
+            issue.message,
+            issue.bbox.model_dump_json() if issue.bbox else "",
+        )
+        if mark in seen:
+            continue
+        seen.add(mark)
+        unique.append(issue)
+    return unique
 
 
 def coverage() -> dict[str, int]:
