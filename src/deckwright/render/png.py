@@ -113,9 +113,15 @@ def pdf_to_png(
             # Не изменилось ничего: перерисовывать нечего, и это законный
             # случай — правка могла не тронуть ни одной страницы.
             return existing
-        result = None
         for span in _ranges(only_pages):
             result = _render(pdf_path, prefix, dpi, timeout_seconds, span)
+            # Молча вернуть прошлые картинки нельзя: они от предыдущей
+            # сборки, и отчёт был бы про другую колоду.
+            if result.returncode != 0:
+                raise RasterizeError(
+                    f"страницы {span[0]}–{span[1]} не перерисованы: "
+                    f"{(result.stdout or result.stderr or '').strip()[:400]}"
+                )
     else:
         # Полная растеризация: сначала убираем прошлые картинки. Иначе колода,
         # ставшая короче, оставила бы хвост от предыдущей сборки, и в отчёт
@@ -123,9 +129,13 @@ def pdf_to_png(
         for stale in existing:
             stale.unlink()
         result = _render(pdf_path, prefix, dpi, timeout_seconds, None)
+        if result.returncode != 0:
+            raise RasterizeError(
+                f"растеризация {pdf_path.name} оборвалась: "
+                f"{(result.stdout or result.stderr or '').strip()[:400]}"
+            )
 
     pages = sorted(output_dir.glob(pattern))
     if not pages:
-        output = (result.stdout or result.stderr or "").strip() if result else ""
-        raise RasterizeError(f"картинки не созданы для {pdf_path.name}: {output[:400]}")
+        raise RasterizeError(f"картинки не созданы для {pdf_path.name}")
     return pages
