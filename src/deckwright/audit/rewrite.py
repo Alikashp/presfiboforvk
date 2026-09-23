@@ -98,14 +98,38 @@ def _format_findings(issues: list[Issue]) -> str:
     return "\n".join(f"- {issue.message} ({issue.fix.description})" for issue in issues)
 
 
+def _capacity(issues: list[Issue]) -> int:
+    """Во сколько строк надо уложиться на этом слайде.
+
+    Берётся из находки: фиттер померил рамку и знает точное число. Без него
+    промпт говорит «покороче», и живой прогон показал, чем это кончается —
+    модель сократила каждую строку втрое, число абзацев не тронула, и
+    переполнение осталось: в рамку помещается две строки, а абзацев было пять.
+    """
+    limits = [
+        int(issue.fix.params.get("capacity_lines") or 0)
+        for issue in issues
+        if issue.fix.params.get("capacity_lines")
+    ]
+    return min(limits) if limits else 0
+
+
 def _too_long(text: str, limit: int) -> bool:
     return limit > 0 and len(text) > limit
 
 
 def _check(
-    slide: SlidePlan, answer: RewrittenSlide, budget: LengthBudget | None
+    slide: SlidePlan,
+    answer: RewrittenSlide,
+    budget: LengthBudget | None,
+    capacity: int = 0,
 ) -> str | None:
-    """Причина отказа или `None`, если правку можно принять."""
+    """Причина отказа или `None`, если правку можно принять.
+
+    `capacity` — сколько строк помещается в рамку. Ответ, который в неё не
+    влезет, принимать бессмысленно: следующий аудит вернёт ту же находку, а
+    итерации кончатся.
+    """
     known = {block.id for block in slide.blocks}
     unknown = [block.id for block in answer.blocks if block.id not in known]
     if unknown:
@@ -136,6 +160,20 @@ def _check(
                         f"блок {block.id}: пункт из {words} слов при пороге "
                         f"{budget.max_words_per_bullet}"
                     )
+
+    if capacity:
+        headings = {block.id: block.heading for block in slide.blocks}
+        for block in answer.blocks:
+            # Заголовок блока занимает строку наравне с пунктами, и остаётся
+            # от плана, если модель своего не прислала: правка не имеет права
+            # его выбрасывать.
+            heading = block.heading or headings.get(block.id, "")
+            occupied = len(block.items) + (1 if heading else 0)
+            if occupied > capacity:
+                return (
+                    f"блок {block.id}: {occupied} строк при ёмкости рамки "
+                    f"{capacity} — текст снова не поместится"
+                )
 
     # Числа проверяются по всему слайду, а не по блоку: пункт мог переехать
     # в соседний блок, и это законно, а вот появиться из ниоткуда — нет.
@@ -204,13 +242,23 @@ def rewrite(
             outcome.rejected[index] = "слайда с таким номером в плане нет"
             continue
         slide = updated.slides[position]
+        capacity = _capacity(targets[index])
+        slide_limits = limits
+        if capacity:
+            slide_limits = (
+                f"- В рамку этого слайда помещается {capacity} строк текста, "
+                f"и это главное ограничение: сократить каждую строку, не "
+                f"сократив их число, не поможет. Заголовок блока занимает "
+                f"строку наравне с пунктом, то есть при заголовке пунктов "
+                f"остаётся {max(0, capacity - 1)}.\n" + limits
+            )
         text = prompt.render(
             language=plan.language,
             title=slide.takeaway_title,
             intent=slide.intent.value,
             blocks=_format_blocks(slide),
             findings=_format_findings(targets[index]),
-            length_limits=limits,
+            length_limits=slide_limits,
         )
         try:
             answer = client.complete(prompt.step, text, RewrittenSlide)
@@ -218,7 +266,7 @@ def rewrite(
             outcome.rejected[index] = f"модель не ответила: {failure}"
             continue
 
-        problem = _check(slide, answer, budget)
+        problem = _check(slide, answer, budget, capacity)
         if problem is not None:
             outcome.rejected[index] = problem
             continue

@@ -227,18 +227,33 @@ def text_overflow(slide: SlideIR) -> list[Issue]:
     for element in slide.all_elements():
         if element.text is None or not element.text.truncated:
             continue
+        # Ёмкость рамки едет и в текст находки, и в параметры исправления.
+        # Без неё «сократите текст» — совет без числа: на живом прогоне модель
+        # сократила каждую строку втрое, а переполнение осталось, потому что
+        # дело было в числе абзацев, а не в их длине.
+        capacity = element.text.capacity_lines
+        used = element.text.used_lines
+        detail = (
+            f": помещается {capacity} строк, занято {used}"
+            if capacity or used
+            else ""
+        )
         found.append(
             _issue(
                 "layout.text_overflow",
                 slide.index,
-                f"{element.id}: текст не помещается в рамку",
+                f"{element.id}: текст не помещается в рамку{detail}",
                 element_ids=[element.id],
                 bbox=element.box,
                 fix=ProposedFix(
                     kind=FixKind.ASSISTED,
                     description="сократить текст или разнести блоки на два слайда",
                     action="shorten_or_split",
-                    params={"element_id": element.id},
+                    params={
+                        "element_id": element.id,
+                        "capacity_lines": capacity,
+                        "used_lines": used,
+                    },
                 ),
             )
         )

@@ -612,14 +612,21 @@ def _overflow_issue(
         bbox=box,
         message=(
             f"{what} не помещается в рамку на минимальном кегле шкалы "
-            f"({result.size_pt:g} pt): не хватает "
-            f"{result.overflow_emu / 914400:.2f} дюйма по высоте"
+            f"({result.size_pt:g} pt): помещается {result.capacity_lines} "
+            f"строк, занято {result.lines}"
         ),
         fix=ProposedFix(
             kind=FixKind.ASSISTED,
             description="сократить текст или разнести блоки на два слайда",
             action="shorten_or_split",
-            params={"slide_index": slide_index, "element_id": element_id},
+            # Ёмкость рамки едет с находкой: тот, кто будет сокращать, должен
+            # знать не «покороче», а «в две строки».
+            params={
+                "slide_index": slide_index,
+                "element_id": element_id,
+                "capacity_lines": result.capacity_lines,
+                "used_lines": result.lines,
+            },
         ),
     )
 
@@ -670,6 +677,8 @@ def build_slide_ir(
 
     title_overflowed = False
     title_steps = 0
+    title_capacity = 0
+    title_used = 0
     if metrics is not None:
         fit = fit_size(
             plan_slide.takeaway_title, metrics, title_box, title_ladder, title_start
@@ -677,6 +686,7 @@ def build_slide_ir(
         title_size = fit.size_pt
         title_steps = fit.steps_down
         title_overflowed = not fit.fits
+        title_capacity, title_used = fit.capacity_lines, fit.lines
         if title_overflowed:
             issues.append(
                 _overflow_issue(plan_slide.index, title_id, title_box, fit, "заголовок")
@@ -694,6 +704,8 @@ def build_slide_ir(
             text=TextContent(
                 scale_steps_down=title_steps,
                 truncated=title_overflowed,
+                capacity_lines=title_capacity,
+                used_lines=title_used,
                 paragraphs=[
                     Paragraph(
                         text=plan_slide.takeaway_title,
@@ -756,11 +768,13 @@ def build_slide_ir(
 
         overflowed = False
         steps_down = 0
+        capacity, used = 0, 0
         if metrics is not None:
             fit = fit_paragraphs(lines, metrics, box, block_ladder, start)
             size = fit.size_pt
             steps_down = fit.steps_down
             overflowed = not fit.fits
+            capacity, used = fit.capacity_lines, fit.lines
             if overflowed:
                 issues.append(
                     _overflow_issue(
@@ -813,6 +827,10 @@ def build_slide_ir(
                     # видеть то же, что видел фиттер.
                     scale_steps_down=steps_down,
                     truncated=overflowed,
+                    # Ёмкость рамки и занятое ею: «сократите текст» без этих
+                    # чисел — совет, который живая модель уже не выполнила.
+                    capacity_lines=capacity,
+                    used_lines=used,
                 ),
             )
         )

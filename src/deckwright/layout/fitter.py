@@ -43,6 +43,12 @@ class FitResult:
     # На сколько высота текста превышает рамку. Ноль, когда влезло.
     overflow_emu: int
     lines: int
+    # Сколько строк вмещает рамка на выбранном кегле. Нужно тому, кто будет
+    # сокращать текст: «пункт не длиннее 76 символов» его не спасёт, если в
+    # рамку помещается три строки, а абзацев пять. Живой прогон переписывания
+    # на этом и споткнулся — модель сократила каждую строку втрое, и
+    # переполнение осталось.
+    capacity_lines: int = 0
 
     @property
     def at_minimum(self) -> bool:
@@ -57,6 +63,23 @@ def _height_emu(
     lines = wrap(text, metrics, size_pt, usable_width)
     height = measure_height_emu(text, metrics, size_pt, box.w, line_height)
     return height, len(lines)
+
+
+def capacity_lines(
+    metrics: FontMetrics,
+    size_pt: float,
+    box: Box,
+    line_height: float = DEFAULT_LINE_HEIGHT,
+) -> int:
+    """Сколько строк этого кегля вмещает рамка.
+
+    Число, без которого совет «сократите текст» бесполезен: живая модель
+    сократила каждую строку втрое, а переполнение осталось, потому что дело
+    было в числе абзацев, а не в их длине.
+    """
+    usable_height = max(1, box.h - FRAME_INSET_Y_EMU)
+    per_line = measure_height_emu("x", metrics, size_pt, box.w, line_height)
+    return int(usable_height // per_line) if per_line else 0
 
 
 def fit_size(
@@ -133,6 +156,7 @@ def fit_paragraphs(
                 steps_down=steps_down,
                 overflow_emu=0,
                 lines=total_lines,
+                capacity_lines=capacity_lines(metrics, size, box, line_height),
             )
         last_height, last_lines = total_height, total_lines
 
@@ -143,6 +167,7 @@ def fit_paragraphs(
         steps_down=len(steps) - 1,
         overflow_emu=last_height - usable_height,
         lines=last_lines,
+        capacity_lines=capacity_lines(metrics, smallest, box, line_height),
     )
 
 
