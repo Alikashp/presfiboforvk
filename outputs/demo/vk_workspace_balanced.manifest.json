@@ -1,7 +1,7 @@
 {
-  "run_id": "run-20260923-092339",
-  "started_at": "2026-09-23T09:23:39.240195Z",
-  "finished_at": "2026-09-23T09:24:04.812167Z",
+  "run_id": "run-20260923-192611",
+  "started_at": "2026-09-23T19:26:11.373567Z",
+  "finished_at": "2026-09-23T19:26:26.599706Z",
   "template_sha256": "1b8883114486c69dff706e9c4fd9382727c4506c2cfa3ec34f86987f1e852f2f",
   "template_name": "vk_workspace.pptx",
   "seed": 20260101,
@@ -48,7 +48,7 @@
   "timings": [
     {
       "stage": "parse",
-      "seconds": 0.041
+      "seconds": 0.016
     },
     {
       "stage": "plan",
@@ -56,79 +56,55 @@
     },
     {
       "stage": "layout",
-      "seconds": 0.051
+      "seconds": 0.039
     },
     {
       "stage": "render_pptx",
-      "seconds": 0.563
+      "seconds": 0.512
     },
     {
       "stage": "verify_package",
-      "seconds": 0.084
+      "seconds": 0.065
     },
     {
       "stage": "render_pdf",
-      "seconds": 5.006
+      "seconds": 4.223
     },
     {
       "stage": "render_png",
-      "seconds": 5.241
+      "seconds": 4.374
     },
     {
       "stage": "render_html",
-      "seconds": 0.177
+      "seconds": 0.138
     },
     {
       "stage": "audit",
-      "seconds": 0.154
+      "seconds": 0.121
     },
     {
       "stage": "render_pptx",
-      "seconds": 0.568
+      "seconds": 0.44
     },
     {
       "stage": "verify_package",
-      "seconds": 0.084
+      "seconds": 0.083
     },
     {
       "stage": "render_pdf",
-      "seconds": 4.994
+      "seconds": 3.995
     },
     {
       "stage": "render_png",
-      "seconds": 1.197
+      "seconds": 0.954
     },
     {
       "stage": "render_html",
-      "seconds": 0.136
+      "seconds": 0.12
     },
     {
       "stage": "audit",
-      "seconds": 0.18
-    },
-    {
-      "stage": "render_pptx",
-      "seconds": 0.558
-    },
-    {
-      "stage": "verify_package",
-      "seconds": 0.082
-    },
-    {
-      "stage": "render_pdf",
-      "seconds": 5.006
-    },
-    {
-      "stage": "render_png",
-      "seconds": 1.184
-    },
-    {
-      "stage": "render_html",
-      "seconds": 0.119
-    },
-    {
-      "stage": "audit",
-      "seconds": 0.146
+      "seconds": 0.145
     }
   ],
   "fix_mode": "auto",
@@ -145,29 +121,11 @@
         6
       ],
       "issues_before": 21,
-      "issues_after": 21,
-      "seconds": 7.159
-    },
-    {
-      "number": 2,
-      "applied": [
-        "6:layout.margin_violation:s6_title_p0",
-        "6:layout.margin_violation:s6_b0_p0"
-      ],
-      "skipped": {},
-      "rewritten_slides": [],
-      "rechecked_slides": [
-        6
-      ],
-      "issues_before": 21,
-      "issues_after": 21,
-      "seconds": 7.096
+      "issues_after": 19,
+      "seconds": 5.739
     }
   ],
-  "unresolved": [
-    "6:layout.margin_violation:s6_title_p0",
-    "6:layout.margin_violation:s6_b0_p0"
-  ],
+  "unresolved": [],
   "font_substitutions": [
     {
       "requested": "Arial",
@@ -191,14 +149,13 @@
     "блок 'b12' не помещается в рамку на минимальном кегле шкалы (11 pt): помещается 3 строк, занято 5",
     "блок 'b14' не помещается в рамку на минимальном кегле шкалы (16 pt): помещается 3 строк, занято 10",
     "блок 'b15' не помещается в рамку на минимальном кегле шкалы (16 pt): помещается 3 строк, занято 11",
-    "блок 'b16' не помещается в рамку на минимальном кегле шкалы (16 pt): помещается 3 строк, занято 8",
-    "после 2 итераций осталось 2 находок: предел итераций исчерпан"
+    "блок 'b16' не помещается в рамку на минимальном кегле шкалы (16 pt): помещается 3 строк, занято 8"
   ],
   "artifacts": {
-    "pptx": "outputs/vk_workspace/balanced/vk_workspace_balanced.pptx",
-    "pdf": "outputs/vk_workspace/balanced/vk_workspace_balanced.pdf",
-    "html": "outputs/vk_workspace/balanced/vk_workspace_balanced.html",
-    "audit": "outputs/vk_workspace/balanced/vk_workspace_balanced.audit.json",
-    "png_dir": "outputs/vk_workspace/balanced/png"
+    "pptx": "outputs/dataset/vk_workspace/balanced/vk_workspace_balanced.pptx",
+    "pdf": "outputs/dataset/vk_workspace/balanced/vk_workspace_balanced.pdf",
+    "html": "outputs/dataset/vk_workspace/balanced/vk_workspace_balanced.html",
+    "audit": "outputs/dataset/vk_workspace/balanced/vk_workspace_balanced.audit.json",
+    "png_dir": "outputs/dataset/vk_workspace/balanced/png"
   }
 }

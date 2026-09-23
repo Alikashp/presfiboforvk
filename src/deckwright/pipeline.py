@@ -53,6 +53,7 @@ from deckwright.schemas import (
     DeckIR,
     DeckPlan,
     FixIteration,
+    FixKind,
     FontSubstitution,
     Issue,
     ModelUsage,
@@ -388,8 +389,13 @@ def _fix_loop(
     `manifest.unresolved` под своим ключом, а не исчезает.
     """
     limit = ctx.cfg.run.max_fix_iterations
+    # Детерминированная правка, после которой находка осталась, второй раз
+    # не применяется: тот же вход даст тот же выход, а итерация стоит полной
+    # пересборки изменённых слайдов. Переписывание моделью сюда не входит —
+    # его повтор может дать другой текст.
+    exhausted: set[str] = set()
     for number in range(1, limit + 1):
-        chosen = select(built.report)
+        chosen = [issue for issue in select(built.report) if issue.key not in exhausted]
         if not chosen:
             break
 
@@ -400,6 +406,11 @@ def _fix_loop(
         )
         if fresh_layout_issues:
             layout_issues = fresh_layout_issues
+        exhausted |= {
+            issue.key
+            for issue in chosen
+            if issue.fix.kind is FixKind.AUTOMATIC and issue.key in record.applied
+        }
         if not record.applied:
             # Ничего не применилось — пересобирать нечего, и следующая
             # итерация повторила бы тот же отказ.
@@ -458,6 +469,7 @@ def _record_vlm(manifest: RunManifest, cfg: Config, client: StructuredClient | N
             retries=getattr(client, "retries", 0),
             thinking_blocks=getattr(client, "thinking_blocks", 0),
             rate_limit_hits=getattr(client, "rate_limit_hits", 0),
+            slowest_call_seconds=getattr(client, "slowest_call_seconds", 0.0),
             cost_usd=cfg.vlm.cost_usd(
                 getattr(client, "prompt_tokens", 0), getattr(client, "completion_tokens", 0)
             ),
@@ -481,9 +493,11 @@ def _finish(
         "png_dir": str(ctx.output_dir / "png"),
     }
     if not result_manifest.within_budget(cfg.run.time_budget_seconds):
+        # Бюджет — на генерацию трёх вариантов вместе; один вариант, сам по
+        # себе вышедший за него, ломает бюджет наверняка.
         result_manifest.warnings.append(
-            f"прогон занял {result_manifest.total_seconds} с при бюджете "
-            f"{cfg.run.time_budget_seconds} с"
+            f"генерация варианта заняла {result_manifest.generation_seconds} с "
+            f"при бюджете {cfg.run.time_budget_seconds} с на три варианта"
         )
     (ctx.output_dir / f"{ctx.stem}.manifest.json").write_text(
         result_manifest.model_dump_json(indent=2), encoding="utf-8"
@@ -606,6 +620,7 @@ def run_variant(
             retries=getattr(client, "retries", 0),
             thinking_blocks=getattr(client, "thinking_blocks", 0),
             rate_limit_hits=getattr(client, "rate_limit_hits", 0),
+            slowest_call_seconds=getattr(client, "slowest_call_seconds", 0.0),
             cost_usd=cfg.llm.cost_usd(
                 getattr(client, "prompt_tokens", 0), getattr(client, "completion_tokens", 0)
             ),

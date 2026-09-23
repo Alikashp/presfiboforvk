@@ -306,5 +306,34 @@ def test_manifest_reports_time_budget():
         }
     )
     assert manifest.total_seconds == 5.5
+    # Разбор входа в бюджет не входит (A18): сверяется только генерация.
+    assert manifest.parse_seconds == 1.5
+    assert manifest.generation_seconds == 4.0
     assert manifest.within_budget(300) is True
-    assert manifest.within_budget(5) is False
+    assert manifest.within_budget(5) is True
+    assert manifest.within_budget(3) is False
+
+
+def test_run_summary_checks_generation_not_parsing():
+    """A18: 300 с — на генерацию трёх вариантов вместе, разбор входа отдельно."""
+    from datetime import UTC, datetime
+
+    from deckwright.schemas import RunSummary
+
+    def summary(parse: float, generation: float) -> RunSummary:
+        now = datetime.now(UTC)
+        return RunSummary(
+            run_id="r",
+            template_name="t.pptx",
+            started_at=now,
+            finished_at=now,
+            variant_seconds={"dense": 90.0, "balanced": 90.0, "airy": 90.0},
+            parse_seconds=parse,
+            generation_seconds=generation,
+            total_seconds=parse + generation,
+            budget_seconds=300,
+        )
+
+    # Долгий разбор не выводит за бюджет: ограничения по нему нет.
+    assert summary(parse=120.0, generation=290.0).within_budget is True
+    assert summary(parse=0.1, generation=301.0).within_budget is False

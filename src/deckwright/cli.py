@@ -62,6 +62,21 @@ def _make_client(cfg, recorded_dir: str | None) -> StructuredClient:
     return LiveClient(cfg.llm)
 
 
+def _make_vlm_client(cfg, recorded_dir: str | None) -> StructuredClient | None:
+    """Модель со зрением для контекстного аудита, если она настроена.
+
+    Без неё прогон не падает: контекстные проверки перечисляются в отчёте как
+    невыполненные. Но и молча обходиться без неё при настроенном ключе
+    нельзя — тогда время генерации меряется без аудита, и бюджет (A18)
+    сверяется не с тем прогоном, который увидит пользователь интерфейса.
+    """
+    if recorded_dir or not cfg.vlm.configured:
+        return None
+    from deckwright.llm.client import LiveClient
+
+    return LiveClient(cfg.vlm)
+
+
 def _cmd_run(args: argparse.Namespace) -> int:
     cfg = load_config(args.config)
     # Шаблон и контент берутся из конфига, если не заданы аргументами: A22
@@ -81,10 +96,15 @@ def _cmd_run(args: argparse.Namespace) -> int:
         )
         return 2
 
+    # Разбор входа в бюджет не входит (A18), но меряется: иначе не видно, что
+    # именно из него вычтено.
+    run_started = time.monotonic()
     pack = ContentPack.model_validate(
         json.loads(Path(content).read_text(encoding="utf-8"))
     )
+    pack_seconds = time.monotonic() - run_started
     client = _make_client(cfg, args.recorded)
+    vlm_client = _make_vlm_client(cfg, args.recorded)
 
     variants = [v.name for v in cfg.variants] if args.variant is None else [args.variant]
     output_root = Path(args.output or cfg.run.output_dir)
@@ -95,13 +115,13 @@ def _cmd_run(args: argparse.Namespace) -> int:
     # (по замеру 34 с на вызов).
     prepared = None
     text_findings = None
-    # Время прогона целиком. Бюджет ТЗ — на одну презентацию, и его держит
-    # манифест каждого варианта; но три варианта запускаются разом, и эта
-    # цифра видна зрителю, значит она обязана быть измерена.
-    run_started = time.monotonic()
+    # Бюджет ТЗ — на генерацию трёх вариантов вместе, без разбора входа.
+    # Сверяется итог по часам, а не сумма манифестов: между вариантами тоже
+    # идёт время.
     started_at = datetime.now(UTC)
     run_id = started_at.strftime("run-%Y%m%d-%H%M%S")
     variant_seconds: dict[str, float] = {}
+    template_parse_seconds = 0.0
     for variant in variants:
         result = run_variant(
             template_path=template,
@@ -113,20 +133,36 @@ def _cmd_run(args: argparse.Namespace) -> int:
             fix_mode=args.fix,
             prepared=prepared,
             text_findings=text_findings,
+            vlm_client=vlm_client,
         )
         prepared = result.prepared
         # Вопросы текстового прохода аудита задаются по плану, а план один на
         # три варианта: опечатки и единый язык от вёрстки не зависят.
         text_findings = result.text_findings
-        variant_seconds[variant] = result.manifest.total_seconds
         manifest = result.manifest
+        variant_seconds[variant] = manifest.generation_seconds
+        template_parse_seconds += manifest.parse_seconds
         stages = ", ".join(f"{t.stage} {t.seconds}с" for t in manifest.timings)
         print(
             f"[{variant}] {result.pptx.name}: {len(result.deck.slides)} слайдов, "
             f"{len(result.pages)} страниц PDF, {result.html.name}"
         )
         print(f"[{variant}] {stages}")
-        print(f"[{variant}] всего {manifest.total_seconds}с из {cfg.run.time_budget_seconds}с")
+        print(
+            f"[{variant}] разбор {manifest.parse_seconds}с, "
+            f"генерация {manifest.generation_seconds}с"
+        )
+        # Счётчики клиента накопительные: у первого варианта в них план, у
+        # следующих — ещё и переписывание. Повторы и 429 объясняют время
+        # планирования лучше, чем сама цифра.
+        for usage in manifest.models:
+            if not usage.mocked:
+                print(
+                    f"[{variant}] модель {usage.role}: вызовов {usage.calls}, "
+                    f"повторов {usage.retries}, ответов 429 {usage.rate_limit_hits}, "
+                    f"токенов {usage.prompt_tokens}+{usage.completion_tokens}, "
+                    f"самый долгий вызов {usage.slowest_call_seconds}с"
+                )
 
         # Что цикл исправления сделал с колодой. Молчать об этом нельзя:
         # прогон менял колоду, и человек обязан видеть, что именно.
@@ -146,24 +182,28 @@ def _cmd_run(args: argparse.Namespace) -> int:
         for warning in manifest.warnings:
             print(f"[{variant}] ⚠ {warning}", file=sys.stderr)
 
+    total = time.monotonic() - run_started
+    parse_seconds = round(pack_seconds + template_parse_seconds, 3)
     summary = RunSummary(
         run_id=run_id,
         template_name=Path(template).name,
         started_at=started_at,
         finished_at=datetime.now(UTC),
         variant_seconds=variant_seconds,
-        total_seconds=round(time.monotonic() - run_started, 3),
-        budget_seconds_per_deck=cfg.run.time_budget_seconds,
+        parse_seconds=parse_seconds,
+        generation_seconds=round(total - parse_seconds, 3),
+        total_seconds=round(total, 3),
+        budget_seconds=cfg.run.time_budget_seconds,
     )
     output_root.mkdir(parents=True, exist_ok=True)
     (output_root / "run-summary.json").write_text(
         summary.model_dump_json(indent=2), encoding="utf-8"
     )
     print(
-        f"[прогон] вариантов {len(variant_seconds)}, всего "
-        f"{summary.total_seconds}с; самая долгая колода "
-        f"{summary.slowest_variant}с из {cfg.run.time_budget_seconds}с "
-        f"({'в бюджете' if summary.every_deck_within_budget else 'ВНЕ БЮДЖЕТА'})"
+        f"[прогон] разбор входа {summary.parse_seconds}с (вне бюджета); "
+        f"генерация вариантов ({len(variant_seconds)}) {summary.generation_seconds}с "
+        f"из {summary.budget_seconds}с "
+        f"({'в бюджете' if summary.within_budget else 'ВНЕ БЮДЖЕТА'})"
     )
     return 0
 

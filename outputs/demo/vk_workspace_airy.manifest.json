@@ -1,7 +1,7 @@
 {
-  "run_id": "run-20260923-092404",
-  "started_at": "2026-09-23T09:24:04.813863Z",
-  "finished_at": "2026-09-23T09:24:30.700682Z",
+  "run_id": "run-20260923-192626",
+  "started_at": "2026-09-23T19:26:26.600698Z",
+  "finished_at": "2026-09-23T19:26:42.673355Z",
   "template_sha256": "1b8883114486c69dff706e9c4fd9382727c4506c2cfa3ec34f86987f1e852f2f",
   "template_name": "vk_workspace.pptx",
   "seed": 20260101,
@@ -48,7 +48,7 @@
   "timings": [
     {
       "stage": "parse",
-      "seconds": 0.052
+      "seconds": 0.012
     },
     {
       "stage": "plan",
@@ -56,79 +56,55 @@
     },
     {
       "stage": "layout",
-      "seconds": 0.056
+      "seconds": 0.034
     },
     {
       "stage": "render_pptx",
-      "seconds": 0.557
+      "seconds": 0.437
     },
     {
       "stage": "verify_package",
-      "seconds": 0.082
+      "seconds": 0.066
     },
     {
       "stage": "render_pdf",
-      "seconds": 4.984
+      "seconds": 4.03
     },
     {
       "stage": "render_png",
-      "seconds": 5.369
+      "seconds": 4.423
     },
     {
       "stage": "render_html",
-      "seconds": 0.162
+      "seconds": 0.187
     },
     {
       "stage": "audit",
-      "seconds": 0.152
+      "seconds": 0.128
     },
     {
       "stage": "render_pptx",
-      "seconds": 0.596
+      "seconds": 0.534
     },
     {
       "stage": "verify_package",
-      "seconds": 0.093
+      "seconds": 0.106
     },
     {
       "stage": "render_pdf",
-      "seconds": 5.063
+      "seconds": 4.773
     },
     {
       "stage": "render_png",
-      "seconds": 1.246
+      "seconds": 1.072
     },
     {
       "stage": "render_html",
-      "seconds": 0.133
+      "seconds": 0.111
     },
     {
       "stage": "audit",
-      "seconds": 0.146
-    },
-    {
-      "stage": "render_pptx",
-      "seconds": 0.549
-    },
-    {
-      "stage": "verify_package",
-      "seconds": 0.105
-    },
-    {
-      "stage": "render_pdf",
-      "seconds": 5.005
-    },
-    {
-      "stage": "render_png",
-      "seconds": 1.242
-    },
-    {
-      "stage": "render_html",
-      "seconds": 0.13
-    },
-    {
-      "stage": "audit",
-      "seconds": 0.163
+      "seconds": 0.158
     }
   ],
   "fix_mode": "auto",
@@ -145,29 +121,11 @@
         6
       ],
       "issues_before": 21,
-      "issues_after": 21,
-      "seconds": 7.277
-    },
-    {
-      "number": 2,
-      "applied": [
-        "6:layout.margin_violation:s6_title_p0",
-        "6:layout.margin_violation:s6_b0_p0"
-      ],
-      "skipped": {},
-      "rewritten_slides": [],
-      "rechecked_slides": [
-        6
-      ],
-      "issues_before": 21,
-      "issues_after": 21,
-      "seconds": 7.195
+      "issues_after": 19,
+      "seconds": 6.754
     }
   ],
-  "unresolved": [
-    "6:layout.margin_violation:s6_title_p0",
-    "6:layout.margin_violation:s6_b0_p0"
-  ],
+  "unresolved": [],
   "font_substitutions": [
     {
       "requested": "Arial",
@@ -191,14 +149,13 @@
     "блок 'b12' не помещается в рамку на минимальном кегле шкалы (11 pt): помещается 3 строк, занято 5",
     "блок 'b14' не помещается в рамку на минимальном кегле шкалы (16 pt): помещается 3 строк, занято 10",
     "блок 'b15' не помещается в рамку на минимальном кегле шкалы (16 pt): помещается 3 строк, занято 11",
-    "блок 'b16' не помещается в рамку на минимальном кегле шкалы (16 pt): помещается 3 строк, занято 8",
-    "после 2 итераций осталось 2 находок: предел итераций исчерпан"
+    "блок 'b16' не помещается в рамку на минимальном кегле шкалы (16 pt): помещается 3 строк, занято 8"
   ],
   "artifacts": {
-    "pptx": "outputs/vk_workspace/airy/vk_workspace_airy.pptx",
-    "pdf": "outputs/vk_workspace/airy/vk_workspace_airy.pdf",
-    "html": "outputs/vk_workspace/airy/vk_workspace_airy.html",
-    "audit": "outputs/vk_workspace/airy/vk_workspace_airy.audit.json",
-    "png_dir": "outputs/vk_workspace/airy/png"
+    "pptx": "outputs/dataset/vk_workspace/airy/vk_workspace_airy.pptx",
+    "pdf": "outputs/dataset/vk_workspace/airy/vk_workspace_airy.pdf",
+    "html": "outputs/dataset/vk_workspace/airy/vk_workspace_airy.html",
+    "audit": "outputs/dataset/vk_workspace/airy/vk_workspace_airy.audit.json",
+    "png_dir": "outputs/dataset/vk_workspace/airy/png"
   }
 }

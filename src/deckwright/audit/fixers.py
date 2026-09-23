@@ -45,9 +45,22 @@ def _element(deck: DeckIR, slide_index: int, element_id: str):
 
 
 def _move_inside(box: Box, width: int, height: int) -> Box:
-    x = max(0, min(box.x, width - box.w))
-    y = max(0, min(box.y, height - box.h))
-    return Box(x=x, y=y, w=min(box.w, width), h=min(box.h, height))
+    return _fit_into(box, 0, 0, width, height)
+
+
+def _fit_into(box: Box, left: int, top: int, right: int, bottom: int) -> Box:
+    """Вписывает рамку в прямоугольник: сдвигом, а если она шире — ужатием.
+
+    Одного сдвига мало. На `vk_workspace` график донора идёт на всю ширину
+    слайда, а заголовок шире области полей на 0.03 дюйма: сдвинутый к левому
+    полю, такой элемент вылезает за правое, находка возвращается, и правка
+    «применена» дважды впустую — по 7 с на итерацию.
+    """
+    w = min(box.w, right - left)
+    h = min(box.h, bottom - top)
+    x = max(left, min(box.x, right - w))
+    y = max(top, min(box.y, bottom - h))
+    return Box(x=x, y=y, w=w, h=h)
 
 
 def apply(deck: DeckIR, issues: list[Issue], spec=None) -> FixOutcome:
@@ -84,13 +97,10 @@ def apply(deck: DeckIR, issues: list[Issue], spec=None) -> FixOutcome:
             if grid is None:
                 skipped[issue.check_id] = "полей у шаблона нет: двигать не к чему"
                 continue
-            element.box = _move_inside(
-                Box(
-                    x=max(element.box.x, grid.margin_left_emu),
-                    y=max(element.box.y, grid.margin_top_emu),
-                    w=element.box.w,
-                    h=element.box.h,
-                ),
+            element.box = _fit_into(
+                element.box,
+                grid.margin_left_emu,
+                grid.margin_top_emu,
                 deck.slide_width_emu - grid.margin_right_emu,
                 deck.slide_height_emu - grid.margin_bottom_emu,
             )

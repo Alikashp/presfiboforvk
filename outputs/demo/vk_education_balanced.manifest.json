@@ -1,7 +1,7 @@
 {
-  "run_id": "run-20260923-092442",
-  "started_at": "2026-09-23T09:24:42.836862Z",
-  "finished_at": "2026-09-23T09:24:54.499852Z",
+  "run_id": "run-20260923-192655",
+  "started_at": "2026-09-23T19:26:55.588807Z",
+  "finished_at": "2026-09-23T19:27:06.116756Z",
   "template_sha256": "9ef2323ed5f49f464aee5ae7065f1f57bb92c8be3a635be507d59819e285cfe0",
   "template_name": "vk_education.pptx",
   "seed": 20260101,
@@ -48,7 +48,7 @@
   "timings": [
     {
       "stage": "parse",
-      "seconds": 0.08
+      "seconds": 0.033
     },
     {
       "stage": "plan",
@@ -56,55 +56,55 @@
     },
     {
       "stage": "layout",
-      "seconds": 0.092
+      "seconds": 0.064
     },
     {
       "stage": "render_pptx",
-      "seconds": 1.075
+      "seconds": 0.854
     },
     {
       "stage": "verify_package",
-      "seconds": 0.111
+      "seconds": 0.096
     },
     {
       "stage": "render_pdf",
-      "seconds": 3.212
+      "seconds": 3.174
     },
     {
       "stage": "render_png",
-      "seconds": 1.508
+      "seconds": 1.002
     },
     {
       "stage": "render_html",
-      "seconds": 0.106
+      "seconds": 0.095
     },
     {
       "stage": "audit",
-      "seconds": 0.225
+      "seconds": 0.208
     },
     {
       "stage": "render_pptx",
-      "seconds": 1.003
+      "seconds": 0.936
     },
     {
       "stage": "verify_package",
-      "seconds": 0.11
+      "seconds": 0.114
     },
     {
       "stage": "render_pdf",
-      "seconds": 3.454
+      "seconds": 3.337
     },
     {
       "stage": "render_png",
-      "seconds": 0.355
+      "seconds": 0.26
     },
     {
       "stage": "render_html",
-      "seconds": 0.098
+      "seconds": 0.1
     },
     {
       "stage": "audit",
-      "seconds": 0.23
+      "seconds": 0.256
     }
   ],
   "fix_mode": "auto",
@@ -127,7 +127,7 @@
       ],
       "issues_before": 14,
       "issues_after": 9,
-      "seconds": 5.253
+      "seconds": 5.003
     }
   ],
   "unresolved": [],
@@ -157,10 +157,10 @@
     "блок 'b16' не помещается в рамку на минимальном кегле шкалы (12 pt): помещается 2 строк, занято 4"
   ],
   "artifacts": {
-    "pptx": "outputs/vk_education/balanced/vk_education_balanced.pptx",
-    "pdf": "outputs/vk_education/balanced/vk_education_balanced.pdf",
-    "html": "outputs/vk_education/balanced/vk_education_balanced.html",
-    "audit": "outputs/vk_education/balanced/vk_education_balanced.audit.json",
-    "png_dir": "outputs/vk_education/balanced/png"
+    "pptx": "outputs/dataset/vk_education/balanced/vk_education_balanced.pptx",
+    "pdf": "outputs/dataset/vk_education/balanced/vk_education_balanced.pdf",
+    "html": "outputs/dataset/vk_education/balanced/vk_education_balanced.html",
+    "audit": "outputs/dataset/vk_education/balanced/vk_education_balanced.audit.json",
+    "png_dir": "outputs/dataset/vk_education/balanced/png"
   }
 }

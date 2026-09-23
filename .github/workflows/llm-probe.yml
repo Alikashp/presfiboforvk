@@ -44,7 +44,7 @@ on:
         required: false
         default: "4"
       full_run:
-        description: "Прогнать всю колоду до .pptx, а не только планирование"
+        description: "Прямой замер бюджета: три варианта с аудитом и циклом исправления"
         required: false
         default: "false"
       rewrite:
@@ -198,12 +198,19 @@ jobs:
             echo "плана нет: диагностический вызов не дошёл до сохранения"
           fi
 
+      # Прямой замер бюджета A18: генерация трёх вариантов вместе, с
+      # картиночным аудитом и циклом исправления — как в интерфейсе. Модель
+      # со зрением та же, что в audit-probe. Итог — последняя строка лога
+      # («генерация вариантов … из 300с») и probe-out/deck/run-summary.json.
       - name: Сквозной прогон на живой модели
         if: ${{ inputs.full_run == 'true' && inputs.rewrite != 'true' }}
         env:
           LLM_BASE_URL: ${{ inputs.base_url }}
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
           LLM_MODEL: ${{ inputs.model }}
+          VLM_BASE_URL: ${{ inputs.base_url }}
+          VLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          VLM_MODEL: ${{ inputs.model }}
         run: |
           if [ "${{ inputs.template }}" = "synthetic" ]; then
             python tests/fixtures/make_template.py probe-templates/synthetic.pptx
@@ -215,7 +222,7 @@ jobs:
           deckwright run \
             --template "$TEMPLATE" \
             --content tests/fixtures/content_pack.json \
-            --variant balanced \
+            --fix auto \
             --output probe-out/deck
 
       - name: Результаты

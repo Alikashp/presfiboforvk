@@ -23,6 +23,7 @@ from __future__ import annotations
 import base64
 import json
 import re
+import time
 from typing import TypeVar
 
 from openai import (
@@ -133,6 +134,10 @@ class LiveClient:
         self.completion_tokens = 0
         self.retries = 0
         self.thinking_blocks = 0
+        # Самый долгий вызов, включая повторы, которые SDK делает сам при
+        # таймауте и сбое соединения: они нигде больше не видны. Вызов дольше
+        # `timeout_seconds` — это и есть такой невидимый повтор.
+        self.slowest_call_seconds = 0.0
         # Ответы 429. SDK сам повторяет их с выдержкой; счётчик нужен, чтобы
         # было видно, упёрлись ли мы в лимит провайдера, а не гадать по времени.
         self.rate_limit_hits = 0
@@ -194,6 +199,7 @@ class LiveClient:
     def _ask(self, step: str, messages: list[dict], estimated: int = 0) -> str:
         params = self._cfg.step(step)
         entry = self.limiter.acquire(estimated) if self.limiter.enabled else None
+        started = time.monotonic()
         try:
             response = self._client.chat.completions.create(
                 model=self._cfg.model,
@@ -222,6 +228,9 @@ class LiveClient:
                 extra_body=self._extra_body(step),
             )
         self.calls += 1
+        self.slowest_call_seconds = max(
+            self.slowest_call_seconds, round(time.monotonic() - started, 3)
+        )
         usage = getattr(response, "usage", None)
         actual = 0
         if usage is not None:

@@ -205,6 +205,34 @@ def test_unchosen_finding_survives(damaged):
     assert len(after.audit.issues) >= len(others)
 
 
+def test_fix_that_did_not_help_is_not_repeated(damaged, monkeypatch):
+    """Детерминированная правка, не убравшая находку, второй раз не идёт.
+
+    Тот же вход даст тот же выход, а итерация стоит пересборки. На
+    `vk_workspace` так уходило по 7 с на вариант: правка полей «применялась»
+    дважды, находка оставалась.
+    """
+    from deckwright import pipeline
+    from deckwright.audit.fixers import FixOutcome
+
+    stub, issue = damaged
+
+    def no_effect(deck, issues, spec=None):
+        return FixOutcome(
+            applied=[f"{i.slide_index}:{i.check_id}:{i.fix.params['element_id']}" for i in issues],
+            skipped={},
+        )
+
+    monkeypatch.setattr(pipeline, "apply_fixes", no_effect)
+    # Повтор проверяется при пределе в две итерации, каким бы ни был конфиг.
+    monkeypatch.setattr(stub.context.cfg.run, "max_fix_iterations", 2)
+
+    after = apply_selection(stub, {issue.key})
+
+    assert len(after.manifest.fix_iterations) == 1
+    assert issue.key in after.manifest.unresolved
+
+
 def test_contextual_finding_is_never_applied(reviewed):
     """Контекстную находку применять нечем: у неё только показ.
 
