@@ -276,6 +276,46 @@ class RecurringElement(BaseModel):
     provenance: Provenance
 
 
+# Порог читаемости из Приложения 1: им же меряет аудит.
+MIN_TEXT_CONTRAST = 4.5
+
+
+def readable_text_color(
+    palette: list[ColorToken], background: Color | None, is_dark: bool = False
+) -> Color | None:
+    """Самый читаемый на этом фоне цвет текста **из палитры шаблона**.
+
+    Живёт в контракте, а не в слое: спрашивают его и разбор (когда шаблон не
+    сказал, каким цветом писать), и вёрстка (когда цвет донора на нашем фоне
+    не читается). Два ответа на один вопрос разошлись бы, и колода набралась
+    бы двумя разными цветами.
+
+    Зачем вообще: раньше в обоих местах подставлялся `#111111` — цвет,
+    которого в шаблоне нет. Он давал 24 находки из 28 на holdout и 30 из 30
+    на синтетическом шаблоне, хотя в палитре обоих лежит `#000000` с ролью
+    `text` и контрастом 21 к белому.
+
+    Предпочтение — цветам, которыми шаблон пишет текст: заливка бывает
+    контрастной и совершенно негодной для набора. Фон бывает неизвестен —
+    композиция снята с донора, а фон слайду назначит layout; тогда судим по
+    яркости шаблона, ею фон и окажется.
+    """
+    if background is None:
+        background = Color(rgb="000000") if is_dark else Color(rgb="FFFFFF")
+    readable = [
+        token
+        for token in palette
+        if token.color.contrast_ratio(background) >= MIN_TEXT_CONTRAST
+    ]
+    if not readable:
+        return None
+    texty = [token for token in readable if "text" in token.roles]
+    return max(
+        texty or readable,
+        key=lambda token: token.color.contrast_ratio(background),
+    ).color
+
+
 class TemplateSpec(BaseModel):
     """Полный разбор шаблона. Выход слоя parse, вход слоёв layout и audit."""
 

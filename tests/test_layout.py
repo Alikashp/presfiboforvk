@@ -315,3 +315,53 @@ def test_text_is_readable_on_the_background_it_lands_on(specs, plan):
                             f"{name}/{variant}: слайд {slide.index}, {element.id} — "
                             f"контраст {ratio:.2f} при пороге {MIN_CONTRAST}"
                         )
+
+
+def test_deck_is_set_in_the_templates_own_colours(template_paths):
+    """Цвет текста берётся из палитры шаблона, а не придумывается.
+
+    Раньше, когда цвет донора на нашем фоне не читался (или шаблон не сказал
+    цвета вовсе), подставлялся `#111111` — цвет, которого в шаблоне нет. Он
+    давал 24 находки `template.color_not_in_palette` из 28 на holdout и 30 из
+    30 на синтетическом шаблоне, хотя в палитре обоих лежит `#000000` с ролью
+    `text`. Аудит был прав, а виновата была вёрстка.
+    """
+    import json
+    from pathlib import Path
+
+    from deckwright.config import load_config
+    from deckwright.llm.fake import RecordedClient
+    from deckwright.pipeline import run_variant
+    from deckwright.schemas import ContentPack
+
+    root = Path(__file__).resolve().parents[1]
+    cfg = load_config(root / "configs" / "config.yaml")
+    pack = ContentPack.model_validate(
+        json.loads((root / "tests" / "fixtures" / "content_pack.json").read_text("utf-8"))
+    )
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        result = run_variant(
+            template_path=template_paths[0],
+            pack=pack,
+            cfg=cfg,
+            client=RecordedClient(root / "tests" / "fixtures" / "recorded"),
+            variant="balanced",
+            output_dir=tmp,
+            fix_mode="review",
+        )
+
+    palette = {token.color.rgb for token in result.spec.palette}
+    invented = {
+        paragraph.style.color.rgb
+        for slide in result.deck.slides
+        for element in slide.all_elements()
+        if element.text
+        for paragraph in element.text.paragraphs
+        if paragraph.style.color.rgb not in palette
+    }
+    assert not invented, (
+        f"колода набрана цветами, которых в шаблоне нет: {sorted(invented)}; "
+        f"палитра шаблона: {sorted(palette)}"
+    )

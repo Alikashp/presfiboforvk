@@ -391,3 +391,138 @@ def test_second_audit_asks_only_about_changed_slides(damaged):
         f"(в колоде {len(after.deck.slides)}): переспрашивается вся колода"
     )
     assert vlm.slide_questions < len(after.deck.slides)
+
+
+# ── Переписывание моделью от начала до конца ─────────────────────────────────
+#
+# Главный сценарий демонстрации: находка «текст не помещается» → выбор
+# человека → модель переписывает → колода пересобирается → находка уходит.
+# Проверяется на настоящем чужом шаблоне (`data/holdout/`), где вёрстка
+# действительно ломается: узкие рамки и длинный русский текст дают четыре
+# находки переполнения.
+
+REAL_HOLDOUT = Path(__file__).resolve().parents[1] / "data" / "holdout"
+
+
+class ScriptedRewriter:
+    """Модель, которая честно сокращает: каждый пункт до нескольких слов.
+
+    Настоящая модель на этом месте пишет осмысленнее, но проверяем мы не её
+    красноречие, а то, что пайплайн принимает ответ, пересобирает колоду и
+    снимает находку.
+    """
+
+    mocked = True
+
+    def __init__(self) -> None:
+        self.calls = 0
+        self.prompts: list[str] = []
+
+    def complete(self, step, prompt, schema, images=None):
+        self.calls += 1
+        self.prompts.append(prompt)
+        blocks = []
+        # Идентификаторы блоков модель берёт из промпта — как настоящая.
+        for line in prompt.splitlines():
+            line = line.strip()
+            if line.startswith("[") and "]" in line:
+                block_id = line[1 : line.index("]")]
+                blocks.append({"id": block_id, "items": ["Коротко и по делу"]})
+        return schema.model_validate(
+            {"takeaway_title": "Платформа ускоряет диагностику", "blocks": blocks}
+        )
+
+
+@pytest.fixture
+def holdout_deck(pack, tmp_path):
+    """Колода на настоящем чужом шаблоне, где текст не влезает в рамки."""
+    template = REAL_HOLDOUT / "zelenie_investicii.pptx"
+    if not template.exists():
+        pytest.skip("настоящего holdout-шаблона нет в data/holdout")
+    cfg = load_config(CONFIG)
+    cfg.run.rewrite_assisted = True
+    result = run_variant(
+        template_path=template,
+        pack=pack,
+        cfg=cfg,
+        client=RecordedClient(Path("tests/fixtures/recorded")),
+        variant="balanced",
+        output_dir=tmp_path / "holdout",
+        fix_mode="review",
+    )
+    overflow = [i for i in result.audit.issues if i.check_id == "layout.text_overflow"]
+    if not overflow:
+        pytest.skip("на этом шаблоне текст помещается: переписывать нечего")
+    return result, overflow
+
+
+def test_rewrite_removes_the_overflow_it_was_chosen_for(holdout_deck):
+    """Находка, выбранная человеком, после переписывания уходит.
+
+    Это и есть A16 в самом дорогом его виде: не сдвинуть рамку, а изменить
+    содержание — и только по явному выбору.
+    """
+    result, overflow = holdout_deck
+    target = overflow[0]
+    client = ScriptedRewriter()
+
+    after = apply_selection(result, {target.key}, client)
+
+    assert client.calls >= 1, "модель не спрашивали"
+    records = after.manifest.fix_iterations
+    assert records and records[0].rewritten_slides == [target.slide_index]
+
+    remaining = [
+        issue
+        for issue in after.audit.issues
+        if issue.check_id == "layout.text_overflow"
+        and issue.slide_index == target.slide_index
+    ]
+    assert not remaining, "переполнение осталось после переписывания"
+
+
+def test_rewritten_text_fits_the_template_budget(holdout_deck):
+    """Переписанный текст обязан влезать: иначе цикл вернёт ту же находку."""
+    result, overflow = holdout_deck
+    target = overflow[0]
+    budget = result.prepared.budget
+
+    after = apply_selection(result, {target.key}, ScriptedRewriter())
+    slide = next(s for s in after.plan.slides if s.index == target.slide_index)
+
+    assert len(slide.takeaway_title) <= budget.title_chars
+    for block in slide.blocks:
+        assert len(block.items) <= budget.max_bullets
+        for item in block.items:
+            assert len(item) <= budget.bullet_chars
+            assert len(item.split()) <= budget.max_words_per_bullet
+
+
+def test_rewrite_that_invents_a_number_is_refused(holdout_deck):
+    """Число, которого на слайде не было, означает потерю происхождения факта.
+
+    Такой ответ отклоняется целиком по слайду, находка остаётся, причина
+    называется вслух — а не подставляется молча.
+    """
+    result, overflow = holdout_deck
+    target = overflow[0]
+
+    class Liar(ScriptedRewriter):
+        def complete(self, step, prompt, schema, images=None):
+            self.calls += 1
+            # Короткий заголовок: иначе сработает проверка бюджета длины и до
+            # проверки чисел дело не дойдёт.
+            return schema.model_validate({"takeaway_title": "Рост на 87 %"})
+
+    after = apply_selection(result, {target.key}, Liar())
+
+    records = after.manifest.fix_iterations
+    assert records and not records[0].rewritten_slides
+    reasons = " ".join(records[0].skipped.values())
+    assert "87" in reasons, reasons
+    assert [
+        issue
+        for issue in after.audit.issues
+        if issue.check_id == "layout.text_overflow"
+        and issue.slide_index == target.slide_index
+    ], "находка обязана остаться: правка не применялась"

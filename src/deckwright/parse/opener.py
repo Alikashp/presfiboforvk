@@ -35,6 +35,7 @@ from deckwright.schemas import (
     SourceKind,
     TemplateSpec,
     TextStyle,
+    readable_text_color,
 )
 
 A_NS = "http://schemas.openxmlformats.org/drawingml/2006/main"
@@ -325,7 +326,12 @@ def _parse(path: Path, font_dir: Path | None) -> TemplateSpec:
                 or master_backdrop
             )
             dark = background is not None and background.luminance < 0.5
-            fallback = Color(rgb="FFFFFF") if dark else Color(rgb="111111")
+            # Шаблон не сказал, каким цветом писать. Спрашиваем его палитру —
+            # `#111111` был бы цветом, которого в шаблоне нет, и аудит потом
+            # справедливо помечал бы им каждый абзац колоды.
+            fallback = readable_text_color(palette, background, dark) or (
+                Color(rgb="FFFFFF") if dark else Color(rgb="111111")
+            )
             layout_id = f"{master_id}/layout{l_index + 1}"
             layout_ids[id(layout._element)] = layout_id
             layouts.append(

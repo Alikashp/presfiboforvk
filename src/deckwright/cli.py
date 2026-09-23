@@ -567,6 +567,141 @@ def _cmd_audit_probe(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_rewrite_probe(args: argparse.Namespace) -> int:
+    """Живой прогон главного сценария демонстрации.
+
+    Находка «текст не помещается» → выбор человека → модель переписывает →
+    колода пересобирается → повторный аудит. Механика закрыта тестами на
+    подставной модели; здесь проверяется то, что тестом не проверишь:
+    **пишет ли настоящая модель текст, который проходит наши рамки**.
+
+    Отклонение — не провал прогона, а результат: значит на демонстрации
+    находка останется, и знать это надо заранее, а не на защите.
+    """
+    import time as _time
+
+    from deckwright.llm.client import LiveClient, probe_endpoint
+    from deckwright.pipeline import apply_selection
+
+    cfg = load_config(args.config)
+    if not cfg.llm.configured:
+        print(
+            "Модель не настроена: нужны LLM_BASE_URL, LLM_API_KEY и LLM_MODEL.",
+            file=sys.stderr,
+        )
+        return 1
+    # Переписывание — шаг, который без флага не выполняется вовсе. Здесь он
+    # включается явно: прогон ради него и затеян.
+    cfg.run.rewrite_assisted = True
+
+    print(f"endpoint : {cfg.llm.base_url}")
+    print(f"модель   : {cfg.llm.model}")
+    reachable, detail, _ = probe_endpoint(cfg.llm)
+    print(f"ключ     : {detail}")
+    if not reachable:
+        print("\nEndpoint не принял ключ: см. подсказки в `deckwright probe`.", file=sys.stderr)
+        return 1
+
+    pack = ContentPack.model_validate(
+        json.loads(Path(args.content).read_text(encoding="utf-8"))
+    )
+    print("\nсобираю колоду по записанным ответам…")
+    built = run_variant(
+        template_path=args.template,
+        pack=pack,
+        cfg=cfg,
+        client=RecordedClient(args.recorded),
+        variant=args.variant,
+        output_dir=Path(args.output) / "before",
+        fix_mode="review",
+    )
+    budget = built.prepared.budget
+    print(f"  слайдов {len(built.deck.slides)}, находок {len(built.report.issues)}")
+    print(
+        f"  бюджет шаблона: заголовок {budget.title_chars} симв, "
+        f"пункт {budget.bullet_chars} симв, пунктов {budget.max_bullets}"
+    )
+
+    targets = [
+        issue
+        for issue in built.report.issues
+        if issue.fix.action in rewrite_actions()
+    ][: args.findings or None]
+    if not targets:
+        print(
+            "\nНа этой колоде нечего переписывать: находок с текстовым "
+            "исправлением нет. Возьмите шаблон с узкими рамками.",
+            file=sys.stderr,
+        )
+        return 1
+
+    print(f"\nнаходок под переписывание: {len(targets)}")
+    for issue in targets:
+        print(f"  {issue.key} — {issue.message}")
+        slide = next(s for s in built.plan.slides if s.index == issue.slide_index)
+        print(f"    было: «{slide.takeaway_title}» ({len(slide.takeaway_title)} симв)")
+        for block in slide.blocks:
+            for item in block.items:
+                print(f"      [{len(item):3}] {item}")
+
+    client = LiveClient(cfg.llm)
+    started = _time.monotonic()
+    after = apply_selection(built, {issue.key for issue in targets}, client)
+    elapsed = _time.monotonic() - started
+
+    print(f"\nпереписывание заняло {elapsed:.1f} с, вызовов {client.calls}")
+    for record in after.manifest.fix_iterations:
+        print(
+            f"  итерация {record.number}: переписано слайдов "
+            f"{record.rewritten_slides or 'ни одного'}, находок "
+            f"{record.issues_before} → {record.issues_after}"
+        )
+        for what, reason in record.skipped.items():
+            print(f"    ОТКЛОНЕНО {what}: {reason}")
+
+    print("\nчто написала модель:")
+    for issue in targets:
+        slide = next(s for s in after.plan.slides if s.index == issue.slide_index)
+        fits = "влезает" if len(slide.takeaway_title) <= budget.title_chars else "НЕ ВЛЕЗАЕТ"
+        print(f"  слайд {issue.slide_index}: «{slide.takeaway_title}» "
+              f"({len(slide.takeaway_title)} симв, {fits})")
+        for block in slide.blocks:
+            for item in block.items:
+                mark = "" if len(item) <= budget.bullet_chars else "  ← ДЛИННЕЕ БЮДЖЕТА"
+                print(f"      [{len(item):3}] {item}{mark}")
+
+    gone = [
+        issue
+        for issue in targets
+        if not any(
+            found.check_id == issue.check_id and found.slide_index == issue.slide_index
+            for found in after.report.issues
+        )
+    ]
+    print(f"\nнаходок ушло: {len(gone)} из {len(targets)}")
+    print(f"вызовов         : {client.calls}")
+    print(f"повторов        : {client.retries}  (ответ не прошёл валидацию по схеме)")
+    print(f"блоков <think>  : {client.thinking_blocks}")
+    print(f"ответов 429     : {client.rate_limit_hits}")
+    print(
+        f"токенов         : вход {client.prompt_tokens}, "
+        f"выход {client.completion_tokens}"
+    )
+    print(
+        f"стоимость       : ${cfg.llm.cost_usd(client.prompt_tokens, client.completion_tokens):.6f}"
+    )
+    # Ушли не все — это результат, а не сбой прогона: значит на демонстрации
+    # часть находок останется, и лучше знать это заранее.
+    return 0
+
+
+def rewrite_actions() -> frozenset[str]:
+    from deckwright.audit.rewrite import REWRITABLE_ACTIONS
+
+    return REWRITABLE_ACTIONS
+
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="deckwright",
@@ -672,6 +807,35 @@ def main(argv: list[str] | None = None) -> int:
     )
     audit.add_argument("--save", default=None, help="Куда сохранить замеры в JSON.")
     audit.set_defaults(func=_cmd_audit_probe)
+
+    rewrite = sub.add_parser(
+        "rewrite-probe",
+        help=(
+            "Живой прогон переписывания: находка ASSISTED → модель → "
+            "пересборка → повторный аудит."
+        ),
+    )
+    rewrite.add_argument("--config", default=str(DEFAULT_CONFIG), help="Путь к config.yaml.")
+    rewrite.add_argument(
+        "--template",
+        default="data/holdout/zelenie_investicii.pptx",
+        help="Шаблон с узкими рамками: на просторном переписывать нечего.",
+    )
+    rewrite.add_argument("--content", required=True, help="Контент-пакет в JSON.")
+    rewrite.add_argument(
+        "--recorded",
+        default="tests/fixtures/recorded",
+        help="Записанные ответы для планирования: платить за него незачем.",
+    )
+    rewrite.add_argument("--variant", default="balanced", help="Вариант вёрстки.")
+    rewrite.add_argument("--output", default="outputs/rewrite-probe", help="Куда класть колоды.")
+    rewrite.add_argument(
+        "--findings",
+        type=int,
+        default=1,
+        help="Сколько находок переписать. 0 — все найденные.",
+    )
+    rewrite.set_defaults(func=_cmd_rewrite_probe)
 
 
     args = parser.parse_args(argv)

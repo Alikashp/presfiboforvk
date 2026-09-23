@@ -48,6 +48,7 @@ from deckwright.schemas import (
     TemplateSpec,
     TextContent,
     TextStyle,
+    readable_text_color,
 )
 from deckwright.visuals.charts import series_from_pack
 
@@ -336,7 +337,11 @@ EMU_PER_POINT = 12_700
 
 
 def _text_color(
-    container, role: SlotRole, is_dark: bool, background: Color | None
+    container,
+    role: SlotRole,
+    is_dark: bool,
+    background: Color | None,
+    spec: TemplateSpec | None = None,
 ) -> Color:
     """Цвет текста для роли — взятый из самого шаблона и проверенный на фоне.
 
@@ -366,12 +371,21 @@ def _text_color(
                 chosen = slot.style.color
                 break
 
-    readable = Color(rgb="FFFFFF") if is_dark else Color(rgb="111111")
-    if chosen is None or background is None:
-        return chosen or readable
-    if chosen.contrast_ratio(background) >= MIN_CONTRAST:
+    # Фон бывает неизвестен: композиция снята с донора, а фон слайду назначает
+    # его layout. Судим тогда по яркости шаблона — ею фон и окажется.
+    judged = background or (Color(rgb="000000") if is_dark else Color(rgb="FFFFFF"))
+    if chosen is not None and chosen.contrast_ratio(judged) >= MIN_CONTRAST:
         return chosen
-    return readable
+
+    # Донорский цвет на нашем фоне не читается (или его нет). Прежде чем
+    # придумывать свой, спрашиваем палитру шаблона: колода обязана быть
+    # набрана его цветами, а не нашими. `#111111` остаётся крайним случаем —
+    # шаблоном, в палитре которого нет ни одного читаемого цвета текста.
+    if spec is not None:
+        from_palette = readable_text_color(spec.palette, background, is_dark)
+        if from_palette is not None:
+            return from_palette
+    return Color(rgb="FFFFFF") if is_dark else Color(rgb="111111")
 
 
 def _content_area(spec: TemplateSpec, container) -> Box:
@@ -687,7 +701,7 @@ def build_slide_ir(
                             font_family=font_family,
                             size_pt=title_size,
                             bold=True,
-                            color=_text_color(container, SlotRole.TITLE, is_dark, background),
+                            color=_text_color(container, SlotRole.TITLE, is_dark, background, spec),
                         ),
                     )
                 ]
@@ -759,7 +773,7 @@ def build_slide_ir(
         style = TextStyle(
             font_family=font_family,
             size_pt=size,
-            color=_text_color(container, role, is_dark, background),
+            color=_text_color(container, role, is_dark, background, spec),
         )
         taken.append(box)
 

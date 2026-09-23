@@ -47,6 +47,14 @@ on:
         description: "Прогнать всю колоду до .pptx, а не только планирование"
         required: false
         default: "false"
+      rewrite:
+        description: "Прогнать переписывание текста моделью по находке аудита (главный сценарий демо)"
+        required: false
+        default: "false"
+      rewrite_findings:
+        description: "Сколько находок переписать (0 — все)"
+        required: false
+        default: "1"
 
 jobs:
   probe:
@@ -80,8 +88,29 @@ jobs:
         env:
           ENABLE_THINKING: ${{ inputs.enable_thinking }}
 
+      # Главный сценарий демонстрации: находка «текст не помещается» → выбор
+      # человека → модель переписывает → пересборка → повторный аудит.
+      # Механика закрыта тестами на подставной модели; здесь проверяется
+      # единственное, чего тестом не проверить: пишет ли настоящая модель
+      # текст, проходящий рамки бюджета и запрет на новые числа.
+      - name: Живое переписывание текста по находке
+        if: ${{ inputs.rewrite == 'true' }}
+        env:
+          LLM_BASE_URL: ${{ inputs.base_url }}
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          LLM_MODEL: ${{ inputs.model }}
+        run: |
+          if [ -z "$LLM_API_KEY" ]; then
+            echo "::error::Секрет LLM_API_KEY не задан."
+            exit 1
+          fi
+          deckwright rewrite-probe \
+            --content tests/fixtures/content_pack.json \
+            --findings "${{ inputs.rewrite_findings }}" \
+            --output probe-out/rewrite
+
       - name: Живой аудит по картинкам слайдов
-        if: ${{ inputs.audit == 'true' }}
+        if: ${{ inputs.audit == 'true' && inputs.rewrite != 'true' }}
         env:
           LLM_BASE_URL: ${{ inputs.base_url }}
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
@@ -104,7 +133,7 @@ jobs:
             --save probe-out/audit-probe.json
 
       - name: Диагностический вызов
-        if: ${{ inputs.audit != 'true' }}
+        if: ${{ inputs.audit != 'true' && inputs.rewrite != 'true' }}
         env:
           LLM_BASE_URL: ${{ inputs.base_url }}
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
@@ -135,7 +164,7 @@ jobs:
       # поэтому полученный план дублируется в лог: оттуда его можно взять как
       # настоящую фикстуру вместо рукописной.
       - name: Полученный план целиком
-        if: ${{ always() && inputs.audit != 'true' }}
+        if: ${{ always() && inputs.audit != 'true' && inputs.rewrite != 'true' }}
         run: |
           if [ -f probe-out/plan_deck.json ]; then
             echo "----- НАЧАЛО plan_deck.json -----"
@@ -146,7 +175,7 @@ jobs:
           fi
 
       - name: Сквозной прогон на живой модели
-        if: ${{ inputs.full_run == 'true' }}
+        if: ${{ inputs.full_run == 'true' && inputs.rewrite != 'true' }}
         env:
           LLM_BASE_URL: ${{ inputs.base_url }}
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
