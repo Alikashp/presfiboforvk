@@ -57,6 +57,12 @@ class TextContent(BaseModel):
     # Во сколько ступеней вниз по шкале шаблона пришлось спуститься.
     scale_steps_down: int = Field(default=0, ge=0)
     truncated: bool = False
+    # Сколько строк помещается в рамку на выбранном кегле, и сколько заняло.
+    # Без этого «сократите текст» — совет без числа: живая модель сократила
+    # каждую строку втрое, а переполнение осталось, потому что дело было в
+    # числе абзацев, а не в их длине.
+    capacity_lines: int = Field(default=0, ge=0)
+    used_lines: int = Field(default=0, ge=0)
 
     @property
     def plain_text(self) -> str:

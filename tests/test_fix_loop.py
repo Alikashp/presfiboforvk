@@ -526,3 +526,68 @@ def test_rewrite_that_invents_a_number_is_refused(holdout_deck):
         if issue.check_id == "layout.text_overflow"
         and issue.slide_index == target.slide_index
     ], "находка обязана остаться: правка не применялась"
+
+
+# ── Ёмкость рамки: чему научил живой прогон ─────────────────────────────────
+#
+# На живом прогоне (LLM probe #8) модель сработала образцово: заголовок 58 → 28
+# символов, пункты втрое короче, новых чисел нет, ноль повторов. И находка не
+# ушла — потому что в рамку помещается **две строки**, а абзацев было пять.
+# Сокращать длину строк было бессмысленно с самого начала, и знать это модель
+# не могла: ей передавали бюджет шаблона («пункт не длиннее 76 символов»), а не
+# ёмкость этой рамки.
+
+
+def test_overflow_finding_says_how_many_lines_fit(holdout_deck):
+    """Находка обязана нести число, а не «не помещается»."""
+    _, overflow = holdout_deck
+    for issue in overflow:
+        assert "помещается" in issue.message and "занято" in issue.message
+        assert issue.fix.params.get("capacity_lines"), issue.fix.params
+
+
+def test_rewrite_that_keeps_too_many_lines_is_refused(holdout_deck):
+    """Короткие строки не спасают, если их число больше ёмкости рамки.
+
+    Это ровно то, что вернула живая модель. Принять такой ответ значит
+    потратить вызов и оставить находку — лучше отказать с причиной.
+    """
+    result, overflow = holdout_deck
+    target = overflow[0]
+
+    class ShortensLinesOnly(ScriptedRewriter):
+        def complete(self, step, prompt, schema, images=None):
+            self.calls += 1
+            blocks = [
+                {"id": line.strip()[1 : line.strip().index("]")], "items": [
+                    "Проблема: фрагментация",
+                    "Решение: платформа",
+                    "Доказательства: пилот",
+                    "Предложение: запуск",
+                ]}
+                for line in prompt.splitlines()
+                if line.strip().startswith("[") and "]" in line
+            ]
+            return schema.model_validate(
+                {"takeaway_title": "От фрагментации к результату", "blocks": blocks}
+            )
+
+    after = apply_selection(result, {target.key}, ShortensLinesOnly())
+    records = after.manifest.fix_iterations
+    assert records and not records[0].rewritten_slides
+    reasons = " ".join(records[0].skipped.values())
+    assert "ёмкости рамки" in reasons, reasons
+
+
+def test_prompt_states_the_real_constraint(holdout_deck):
+    """Модель должна получить число строк, а не «покороче»."""
+    result, overflow = holdout_deck
+    target = overflow[0]
+    client = ScriptedRewriter()
+
+    apply_selection(result, {target.key}, client)
+
+    assert client.prompts, "промпт не отправлялся"
+    text = client.prompts[0]
+    assert "помещается" in text and "строк текста" in text, text[:400]
+    assert "пунктов остаётся" in text, text[:400]
