@@ -1,0 +1,13 @@
+{
+  "run_id": "run-20260923-092431",
+  "template_name": "vk_education.pptx",
+  "started_at": "2026-09-23T09:24:31.187652Z",
+  "finished_at": "2026-09-23T09:25:06.063680Z",
+  "variant_seconds": {
+    "dense": 11.622,
+    "balanced": 11.659,
+    "airy": 11.558
+  },
+  "total_seconds": 34.876,
+  "budget_seconds_per_deck": 300
+}

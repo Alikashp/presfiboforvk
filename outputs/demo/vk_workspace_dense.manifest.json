@@ -1,0 +1,122 @@
+{
+  "run_id": "run-20260923-092328",
+  "started_at": "2026-09-23T09:23:28.660395Z",
+  "finished_at": "2026-09-23T09:23:39.239612Z",
+  "template_sha256": "1b8883114486c69dff706e9c4fd9382727c4506c2cfa3ec34f86987f1e852f2f",
+  "template_name": "vk_workspace.pptx",
+  "seed": 20260101,
+  "variants": [
+    "dense"
+  ],
+  "prompts": [
+    {
+      "name": "plan_deck",
+      "version": "2",
+      "sha256": "0789188286fa266429fb64cbc9372dcb9670d282f81d3cea5c4bef71882cdc16"
+    }
+  ],
+  "models": [
+    {
+      "role": "llm",
+      "model": "recorded",
+      "base_url": "",
+      "steps": {
+        "plan_deck": {
+          "temperature": 0.4,
+          "max_tokens": 6000,
+          "enable_thinking": false,
+          "reasoning_effort": null
+        },
+        "shorten_text": {
+          "temperature": 0.2,
+          "max_tokens": 1000,
+          "enable_thinking": false,
+          "reasoning_effort": null
+        }
+      },
+      "dropped_params": [],
+      "calls": 1,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "retries": 0,
+      "rate_limit_hits": 0,
+      "cost_usd": 0.0,
+      "thinking_blocks": 0,
+      "mocked": true
+    }
+  ],
+  "timings": [
+    {
+      "stage": "parse",
+      "seconds": 0.043
+    },
+    {
+      "stage": "plan",
+      "seconds": 0.002
+    },
+    {
+      "stage": "layout",
+      "seconds": 0.042
+    },
+    {
+      "stage": "render_pptx",
+      "seconds": 0.568
+    },
+    {
+      "stage": "verify_package",
+      "seconds": 0.089
+    },
+    {
+      "stage": "render_pdf",
+      "seconds": 5.249
+    },
+    {
+      "stage": "render_png",
+      "seconds": 4.201
+    },
+    {
+      "stage": "render_html",
+      "seconds": 0.188
+    },
+    {
+      "stage": "audit",
+      "seconds": 0.169
+    }
+  ],
+  "fix_mode": "auto",
+  "fix_iterations": [],
+  "unresolved": [],
+  "font_substitutions": [
+    {
+      "requested": "Arial",
+      "used": "системный подбор",
+      "reason": "шрифт не встроен в шаблон"
+    }
+  ],
+  "warnings": [
+    "шрифты не встроены в шаблон и будут подставлены системой, метрики могут разойтись: Arial",
+    "ни в одном layout'е нет контентных плейсхолдеров: вёрстка опирается на паттерны со слайдов-примеров",
+    "бюджет длины (шрифт шаблона Play): заголовок 49 симв, пункт 22 симв, до 6 пунктов",
+    "блок 'b1' не помещается в рамку на минимальном кегле шкалы (16 pt): помещается 3 строк, занято 11",
+    "блок 'b2' не помещается в рамку на минимальном кегле шкалы (16 pt): помещается 3 строк, занято 15",
+    "заголовок не помещается в рамку на минимальном кегле шкалы (20 pt): помещается 0 строк, занято 2",
+    "блок 'b4' не помещается в рамку на минимальном кегле шкалы (11 pt): помещается 3 строк, занято 4",
+    "заголовок не помещается в рамку на минимальном кегле шкалы (20 pt): помещается 0 строк, занято 2",
+    "блок 'b6' не помещается в рамку на минимальном кегле шкалы (11 pt): помещается 3 строк, занято 5",
+    "заголовок не помещается в рамку на минимальном кегле шкалы (20 pt): помещается 0 строк, занято 2",
+    "блок 'b8' не помещается в рамку на минимальном кегле шкалы (11 pt): помещается 3 строк, занято 4",
+    "заголовок не помещается в рамку на минимальном кегле шкалы (20 pt): помещается 0 строк, занято 2",
+    "заголовок не помещается в рамку на минимальном кегле шкалы (20 pt): помещается 0 строк, занято 2",
+    "блок 'b12' не помещается в рамку на минимальном кегле шкалы (11 pt): помещается 3 строк, занято 5",
+    "блок 'b14' не помещается в рамку на минимальном кегле шкалы (16 pt): помещается 3 строк, занято 10",
+    "блок 'b15' не помещается в рамку на минимальном кегле шкалы (16 pt): помещается 3 строк, занято 11",
+    "блок 'b16' не помещается в рамку на минимальном кегле шкалы (16 pt): помещается 3 строк, занято 8"
+  ],
+  "artifacts": {
+    "pptx": "outputs/vk_workspace/dense/vk_workspace_dense.pptx",
+    "pdf": "outputs/vk_workspace/dense/vk_workspace_dense.pdf",
+    "html": "outputs/vk_workspace/dense/vk_workspace_dense.html",
+    "audit": "outputs/vk_workspace/dense/vk_workspace_dense.audit.json",
+    "png_dir": "outputs/vk_workspace/dense/png"
+  }
+}

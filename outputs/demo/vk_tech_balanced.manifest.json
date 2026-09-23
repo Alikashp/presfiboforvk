@@ -1,0 +1,163 @@
+{
+  "run_id": "run-20260923-092304",
+  "started_at": "2026-09-23T09:23:04.198434Z",
+  "finished_at": "2026-09-23T09:23:16.295735Z",
+  "template_sha256": "cbbe3aa6a21d23cebc4d1383b93dd07a9cea460d683de1903567b616c839485d",
+  "template_name": "vk_tech.pptx",
+  "seed": 20260101,
+  "variants": [
+    "balanced"
+  ],
+  "prompts": [
+    {
+      "name": "plan_deck",
+      "version": "2",
+      "sha256": "0789188286fa266429fb64cbc9372dcb9670d282f81d3cea5c4bef71882cdc16"
+    }
+  ],
+  "models": [
+    {
+      "role": "llm",
+      "model": "recorded",
+      "base_url": "",
+      "steps": {
+        "plan_deck": {
+          "temperature": 0.4,
+          "max_tokens": 6000,
+          "enable_thinking": false,
+          "reasoning_effort": null
+        },
+        "shorten_text": {
+          "temperature": 0.2,
+          "max_tokens": 1000,
+          "enable_thinking": false,
+          "reasoning_effort": null
+        }
+      },
+      "dropped_params": [],
+      "calls": 1,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "retries": 0,
+      "rate_limit_hits": 0,
+      "cost_usd": 0.0,
+      "thinking_blocks": 0,
+      "mocked": true
+    }
+  ],
+  "timings": [
+    {
+      "stage": "parse",
+      "seconds": 0.078
+    },
+    {
+      "stage": "plan",
+      "seconds": 0.0
+    },
+    {
+      "stage": "layout",
+      "seconds": 0.153
+    },
+    {
+      "stage": "render_pptx",
+      "seconds": 1.146
+    },
+    {
+      "stage": "verify_package",
+      "seconds": 0.227
+    },
+    {
+      "stage": "render_pdf",
+      "seconds": 2.926
+    },
+    {
+      "stage": "render_png",
+      "seconds": 1.158
+    },
+    {
+      "stage": "render_html",
+      "seconds": 0.128
+    },
+    {
+      "stage": "audit",
+      "seconds": 0.277
+    },
+    {
+      "stage": "render_pptx",
+      "seconds": 1.192
+    },
+    {
+      "stage": "verify_package",
+      "seconds": 0.146
+    },
+    {
+      "stage": "render_pdf",
+      "seconds": 3.742
+    },
+    {
+      "stage": "render_png",
+      "seconds": 0.498
+    },
+    {
+      "stage": "render_html",
+      "seconds": 0.15
+    },
+    {
+      "stage": "audit",
+      "seconds": 0.277
+    }
+  ],
+  "fix_mode": "auto",
+  "fix_iterations": [
+    {
+      "number": 1,
+      "applied": [
+        "1:layout.margin_violation:s1_title",
+        "7:layout.margin_violation:s6_b0",
+        "11:layout.margin_violation:s10_title"
+      ],
+      "skipped": {},
+      "rewritten_slides": [],
+      "rechecked_slides": [
+        1,
+        7,
+        11
+      ],
+      "issues_before": 6,
+      "issues_after": 3,
+      "seconds": 6.005
+    }
+  ],
+  "unresolved": [],
+  "font_substitutions": [
+    {
+      "requested": "Calibri",
+      "used": "системный подбор",
+      "reason": "шрифт не встроен в шаблон"
+    },
+    {
+      "requested": "Consolas",
+      "used": "системный подбор",
+      "reason": "шрифт не встроен в шаблон"
+    },
+    {
+      "requested": "Arial",
+      "used": "системный подбор",
+      "reason": "шрифт не встроен в шаблон"
+    }
+  ],
+  "warnings": [
+    "шрифты не встроены в шаблон и будут подставлены системой, метрики могут разойтись: Calibri, Consolas, Arial",
+    "бюджет длины (шрифт шаблона Play): заголовок 34 симв, пункт 34 симв, до 6 пунктов",
+    "блок 'b2' не помещается в рамку на минимальном кегле шкалы (7 pt): помещается 2 строк, занято 5",
+    "блок 'b12' не помещается в рамку на минимальном кегле шкалы (4.14 pt): помещается 4 строк, занято 6",
+    "блок 'b15' не помещается в рамку на минимальном кегле шкалы (4.14 pt): помещается 4 строк, занято 5"
+  ],
+  "artifacts": {
+    "pptx": "outputs/vk_tech/balanced/vk_tech_balanced.pptx",
+    "pdf": "outputs/vk_tech/balanced/vk_tech_balanced.pdf",
+    "html": "outputs/vk_tech/balanced/vk_tech_balanced.html",
+    "audit": "outputs/vk_tech/balanced/vk_tech_balanced.audit.json",
+    "png_dir": "outputs/vk_tech/balanced/png"
+  }
+}

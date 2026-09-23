@@ -55,6 +55,10 @@ on:
         description: "Сколько находок переписать (0 — все)"
         required: false
         default: "1"
+      template:
+        description: "Шаблон: путь в репозитории или `synthetic` для собираемого на месте"
+        required: false
+        default: "data/templates/vk_tech.pptx"
 
 jobs:
   probe:
@@ -104,7 +108,15 @@ jobs:
             echo "::error::Секрет LLM_API_KEY не задан."
             exit 1
           fi
+          if [ "${{ inputs.template }}" = "synthetic" ]; then
+            python tests/fixtures/make_template.py probe-templates/synthetic.pptx
+            TEMPLATE=probe-templates/synthetic.pptx
+          else
+            TEMPLATE="${{ inputs.template }}"
+          fi
+          test -f "$TEMPLATE" || { echo "::error::нет шаблона $TEMPLATE"; exit 1; }
           deckwright rewrite-probe \
+            --template "$TEMPLATE" \
             --content tests/fixtures/content_pack.json \
             --findings "${{ inputs.rewrite_findings }}" \
             --output probe-out/rewrite
@@ -120,12 +132,18 @@ jobs:
             echo "::error::Секрет LLM_API_KEY не задан."
             exit 1
           fi
-          python tests/fixtures/make_template.py probe-templates/synthetic.pptx
+          if [ "${{ inputs.template }}" = "synthetic" ]; then
+            python tests/fixtures/make_template.py probe-templates/synthetic.pptx
+            TEMPLATE=probe-templates/synthetic.pptx
+          else
+            TEMPLATE="${{ inputs.template }}"
+          fi
+          test -f "$TEMPLATE" || { echo "::error::нет шаблона $TEMPLATE"; exit 1; }
           # --spoil обязателен: аудит, который всегда доволен, проходит все
           # тесты и бесполезен. Без заведомо испорченной колоды прогон не
           # отвечает на главный вопрос.
           deckwright audit-probe \
-            --template probe-templates/synthetic.pptx \
+            --template "$TEMPLATE" \
             --content tests/fixtures/content_pack.json \
             --slides "${{ inputs.audit_slides }}" \
             --spoil \
@@ -152,10 +170,16 @@ jobs:
           # Шаблон обязателен: без него в промпт не уйдут ограничения
           # длины, и проба проверит не тот промпт, который работает в
           # настоящем прогоне.
-          python tests/fixtures/make_template.py probe-templates/synthetic.pptx
+          if [ "${{ inputs.template }}" = "synthetic" ]; then
+            python tests/fixtures/make_template.py probe-templates/synthetic.pptx
+            TEMPLATE=probe-templates/synthetic.pptx
+          else
+            TEMPLATE="${{ inputs.template }}"
+          fi
+          test -f "$TEMPLATE" || { echo "::error::нет шаблона $TEMPLATE"; exit 1; }
           deckwright probe \
             --content tests/fixtures/content_pack.json \
-            --template probe-templates/synthetic.pptx \
+            --template "$TEMPLATE" \
             --repeats "${{ inputs.repeats }}" \
             --save probe-out/plan_deck.json \
             $ARGS
@@ -181,9 +205,15 @@ jobs:
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
           LLM_MODEL: ${{ inputs.model }}
         run: |
-          python tests/fixtures/make_template.py probe-templates/synthetic.pptx
+          if [ "${{ inputs.template }}" = "synthetic" ]; then
+            python tests/fixtures/make_template.py probe-templates/synthetic.pptx
+            TEMPLATE=probe-templates/synthetic.pptx
+          else
+            TEMPLATE="${{ inputs.template }}"
+          fi
+          test -f "$TEMPLATE" || { echo "::error::нет шаблона $TEMPLATE"; exit 1; }
           deckwright run \
-            --template probe-templates/synthetic.pptx \
+            --template "$TEMPLATE" \
             --content tests/fixtures/content_pack.json \
             --variant balanced \
             --output probe-out/deck
