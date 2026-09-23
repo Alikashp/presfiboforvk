@@ -297,7 +297,9 @@ def render_deck(
         slide = prs.slides.add_slide(layout)
         donor = donors.get(slide_ir.donor_slide_index)
         if donor is not None:
-            _clone_composition(slide, donor)
+            _clone_composition(
+                slide, donor, deck.slide_width_emu, deck.slide_height_emu
+            )
 
         candidates = _text_shapes(slide)
         filled: list[Box] = []
@@ -450,17 +452,53 @@ def _collect_donors(prs, deck: DeckIR) -> dict[int, tuple[object, list]]:
     return donors
 
 
-def _clone_composition(slide, donor: tuple[object, list]) -> None:
+A_NS = "http://schemas.openxmlformats.org/drawingml/2006/main"
+
+
+def _off_canvas(element: etree._Element, width: int, height: int) -> bool:
+    """Лежит ли фигура целиком за пределами холста.
+
+    У `vk_education` таких десять: экспорт из Google Slides оставляет
+    служебные надписи справа от слайда, и клонирование композиции тащило их с
+    собой — шесть доезжали до готовой колоды. На картинке их не видно, но
+    PowerPoint показывает их человеку, а наша же проверка «элемент за
+    границами слайда» права насчёт них.
+
+    Частично вылезшую фигуру не трогаем: это может быть задуманный дизайнером
+    вынос за край, и решать за него — не наше дело.
+    """
+    # Геометрия лежит под `p:spPr` (у группы — под `p:grpSpPr`), а у картинки
+    # ещё глубже. Берём первый `a:xfrm` в порядке документа: он принадлежит
+    # самой фигуре, вложенные идут после него.
+    xfrm = element.find(f".//{{{A_NS}}}xfrm")
+    offset = xfrm.find(f"{{{A_NS}}}off") if xfrm is not None else None
+    extent = xfrm.find(f"{{{A_NS}}}ext") if xfrm is not None else None
+    if offset is None or extent is None:
+        # Фигура без собственной геометрии наследует её от плейсхолдера;
+        # судить о ней по отсутствующим числам нельзя.
+        return False
+    try:
+        x, y = int(offset.get("x", 0)), int(offset.get("y", 0))
+        cx, cy = int(extent.get("cx", 0)), int(extent.get("cy", 0))
+    except (TypeError, ValueError):
+        return False
+    return x >= width or y >= height or x + cx <= 0 or y + cy <= 0
+
+
+def _clone_composition(slide, donor: tuple[object, list], width: int, height: int) -> None:
     """Переносит фигуры донора на новый слайд вместе со связями.
 
-    Клонируется всё, кроме служебных узлов дерева фигур: карточки, картинки,
-    коннекторы, декор. Это и есть та композиция, которую выбрала вёрстка, — и
-    её оформление приезжает целиком, а не пересказывается.
+    Клонируется всё, кроме служебных узлов дерева фигур и того, что лежит за
+    холстом: карточки, картинки, коннекторы, декор. Это и есть та композиция,
+    которую выбрала вёрстка, — и её оформление приезжает целиком, а не
+    пересказывается.
     """
     donor_part, donor_shapes = donor
     for element in donor_shapes:
         tag = etree.QName(element).localname
         if tag in ("nvGrpSpPr", "grpSpPr"):
+            continue
+        if _off_canvas(element, width, height):
             continue
         clone_shape(element, donor_part, slide)
 

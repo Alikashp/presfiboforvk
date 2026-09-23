@@ -1,0 +1,204 @@
+{
+  "run_id": "run-20260923-092404",
+  "started_at": "2026-09-23T09:24:04.813863Z",
+  "finished_at": "2026-09-23T09:24:30.700682Z",
+  "template_sha256": "1b8883114486c69dff706e9c4fd9382727c4506c2cfa3ec34f86987f1e852f2f",
+  "template_name": "vk_workspace.pptx",
+  "seed": 20260101,
+  "variants": [
+    "airy"
+  ],
+  "prompts": [
+    {
+      "name": "plan_deck",
+      "version": "2",
+      "sha256": "0789188286fa266429fb64cbc9372dcb9670d282f81d3cea5c4bef71882cdc16"
+    }
+  ],
+  "models": [
+    {
+      "role": "llm",
+      "model": "recorded",
+      "base_url": "",
+      "steps": {
+        "plan_deck": {
+          "temperature": 0.4,
+          "max_tokens": 6000,
+          "enable_thinking": false,
+          "reasoning_effort": null
+        },
+        "shorten_text": {
+          "temperature": 0.2,
+          "max_tokens": 1000,
+          "enable_thinking": false,
+          "reasoning_effort": null
+        }
+      },
+      "dropped_params": [],
+      "calls": 1,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "retries": 0,
+      "rate_limit_hits": 0,
+      "cost_usd": 0.0,
+      "thinking_blocks": 0,
+      "mocked": true
+    }
+  ],
+  "timings": [
+    {
+      "stage": "parse",
+      "seconds": 0.052
+    },
+    {
+      "stage": "plan",
+      "seconds": 0.0
+    },
+    {
+      "stage": "layout",
+      "seconds": 0.056
+    },
+    {
+      "stage": "render_pptx",
+      "seconds": 0.557
+    },
+    {
+      "stage": "verify_package",
+      "seconds": 0.082
+    },
+    {
+      "stage": "render_pdf",
+      "seconds": 4.984
+    },
+    {
+      "stage": "render_png",
+      "seconds": 5.369
+    },
+    {
+      "stage": "render_html",
+      "seconds": 0.162
+    },
+    {
+      "stage": "audit",
+      "seconds": 0.152
+    },
+    {
+      "stage": "render_pptx",
+      "seconds": 0.596
+    },
+    {
+      "stage": "verify_package",
+      "seconds": 0.093
+    },
+    {
+      "stage": "render_pdf",
+      "seconds": 5.063
+    },
+    {
+      "stage": "render_png",
+      "seconds": 1.246
+    },
+    {
+      "stage": "render_html",
+      "seconds": 0.133
+    },
+    {
+      "stage": "audit",
+      "seconds": 0.146
+    },
+    {
+      "stage": "render_pptx",
+      "seconds": 0.549
+    },
+    {
+      "stage": "verify_package",
+      "seconds": 0.105
+    },
+    {
+      "stage": "render_pdf",
+      "seconds": 5.005
+    },
+    {
+      "stage": "render_png",
+      "seconds": 1.242
+    },
+    {
+      "stage": "render_html",
+      "seconds": 0.13
+    },
+    {
+      "stage": "audit",
+      "seconds": 0.163
+    }
+  ],
+  "fix_mode": "auto",
+  "fix_iterations": [
+    {
+      "number": 1,
+      "applied": [
+        "6:layout.margin_violation:s6_title_p0",
+        "6:layout.margin_violation:s6_b0_p0"
+      ],
+      "skipped": {},
+      "rewritten_slides": [],
+      "rechecked_slides": [
+        6
+      ],
+      "issues_before": 21,
+      "issues_after": 21,
+      "seconds": 7.277
+    },
+    {
+      "number": 2,
+      "applied": [
+        "6:layout.margin_violation:s6_title_p0",
+        "6:layout.margin_violation:s6_b0_p0"
+      ],
+      "skipped": {},
+      "rewritten_slides": [],
+      "rechecked_slides": [
+        6
+      ],
+      "issues_before": 21,
+      "issues_after": 21,
+      "seconds": 7.195
+    }
+  ],
+  "unresolved": [
+    "6:layout.margin_violation:s6_title_p0",
+    "6:layout.margin_violation:s6_b0_p0"
+  ],
+  "font_substitutions": [
+    {
+      "requested": "Arial",
+      "used": "системный подбор",
+      "reason": "шрифт не встроен в шаблон"
+    }
+  ],
+  "warnings": [
+    "шрифты не встроены в шаблон и будут подставлены системой, метрики могут разойтись: Arial",
+    "ни в одном layout'е нет контентных плейсхолдеров: вёрстка опирается на паттерны со слайдов-примеров",
+    "бюджет длины (шрифт шаблона Play): заголовок 49 симв, пункт 22 симв, до 6 пунктов",
+    "блок 'b1' не помещается в рамку на минимальном кегле шкалы (16 pt): помещается 3 строк, занято 11",
+    "блок 'b2' не помещается в рамку на минимальном кегле шкалы (16 pt): помещается 3 строк, занято 15",
+    "заголовок не помещается в рамку на минимальном кегле шкалы (20 pt): помещается 0 строк, занято 2",
+    "блок 'b4' не помещается в рамку на минимальном кегле шкалы (11 pt): помещается 3 строк, занято 4",
+    "заголовок не помещается в рамку на минимальном кегле шкалы (20 pt): помещается 0 строк, занято 2",
+    "блок 'b6' не помещается в рамку на минимальном кегле шкалы (11 pt): помещается 3 строк, занято 5",
+    "заголовок не помещается в рамку на минимальном кегле шкалы (20 pt): помещается 0 строк, занято 2",
+    "блок 'b8' не помещается в рамку на минимальном кегле шкалы (11 pt): помещается 3 строк, занято 4",
+    "заголовок не помещается в рамку на минимальном кегле шкалы (20 pt): помещается 0 строк, занято 2",
+    "блок 'b12' не помещается в рамку на минимальном кегле шкалы (11 pt): помещается 3 строк, занято 5",
+    "блок 'b14' не помещается в рамку на минимальном кегле шкалы (16 pt): помещается 3 строк, занято 10",
+    "блок 'b15' не помещается в рамку на минимальном кегле шкалы (16 pt): помещается 3 строк, занято 11",
+    "блок 'b16' не помещается в рамку на минимальном кегле шкалы (16 pt): помещается 3 строк, занято 8",
+    "после 2 итераций осталось 2 находок: предел итераций исчерпан"
+  ],
+  "artifacts": {
+    "pptx": "outputs/vk_workspace/airy/vk_workspace_airy.pptx",
+    "pdf": "outputs/vk_workspace/airy/vk_workspace_airy.pdf",
+    "html": "outputs/vk_workspace/airy/vk_workspace_airy.html",
+    "audit": "outputs/vk_workspace/airy/vk_workspace_airy.audit.json",
+    "png_dir": "outputs/vk_workspace/airy/png"
+  }
+}

@@ -200,6 +200,26 @@ def test_layout_inherits_its_size_from_the_master(template_paths):
             continue
         declared = int(found.group(1)) / 100
 
+        # Наследовать нечего, если каждый layout объявил кегль сам. У
+        # `vk_tech` так и есть: 37 заголовков из 37 со своим `sz`, и требовать
+        # там кегль мастера значит требовать того, чего в шаблоне нет.
+        # Проверяем механизм там, где он работает, а не факт совпадения.
+        with zipfile.ZipFile(path) as archive:
+            silent = [
+                name
+                for name in sorted(archive.namelist())
+                if re.match(r"ppt/slideLayouts/slideLayout\d+\.xml$", name)
+                and any(
+                    ('type="title"' in sp or 'type="ctrTitle"' in sp)
+                    and not re.search(r'sz="\d+"', sp)
+                    for sp in re.findall(
+                        r"<p:sp>.*?</p:sp>", archive.read(name).decode("utf-8"), re.S
+                    )
+                )
+            ]
+        if not silent:
+            continue
+
         inherited = [
             slot.style.size_pt
             for layout in spec.layouts
@@ -207,6 +227,7 @@ def test_layout_inherits_its_size_from_the_master(template_paths):
             if slot.role is SlotRole.TITLE and slot.style is not None
         ]
         assert declared in inherited, (
-            f"{path.name}: кегль заголовка из мастера ({declared} pt) не "
-            f"достался ни одному layout'у: {sorted(set(inherited))}"
+            f"{path.name}: {len(silent)} layout'ов не объявляют кегль заголовка, "
+            f"и он обязан достаться им из мастера ({declared} pt); "
+            f"получено: {sorted(set(inherited))}"
         )

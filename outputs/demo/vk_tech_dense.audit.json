@@ -1,0 +1,102 @@
+{
+  "variant": "dense",
+  "issues": [
+    {
+      "check_id": "layout.text_overflow",
+      "kind": "deterministic",
+      "category": "layout",
+      "severity": "warning",
+      "slide_index": 2,
+      "element_ids": [
+        "s2_b0"
+      ],
+      "bbox": {
+        "x": 210685,
+        "y": 2940812,
+        "w": 4287837,
+        "h": 285750
+      },
+      "message": "s2_b0: текст не помещается в рамку: помещается 2 строк, занято 5",
+      "fix": {
+        "kind": "assisted",
+        "description": "сократить текст или разнести блоки на два слайда",
+        "action": "shorten_or_split",
+        "params": {
+          "element_id": "s2_b0",
+          "capacity_lines": 2,
+          "used_lines": 5
+        }
+      },
+      "confidence": 1.0
+    },
+    {
+      "check_id": "layout.text_overflow",
+      "kind": "deterministic",
+      "category": "layout",
+      "severity": "warning",
+      "slide_index": 9,
+      "element_ids": [
+        "s7_b0_p0"
+      ],
+      "bbox": {
+        "x": 210685,
+        "y": 2940812,
+        "w": 4287837,
+        "h": 285750
+      },
+      "message": "s7_b0_p0: текст не помещается в рамку: помещается 2 строк, занято 4",
+      "fix": {
+        "kind": "assisted",
+        "description": "сократить текст или разнести блоки на два слайда",
+        "action": "shorten_or_split",
+        "params": {
+          "element_id": "s7_b0_p0",
+          "capacity_lines": 2,
+          "used_lines": 4
+        }
+      },
+      "confidence": 1.0
+    },
+    {
+      "check_id": "layout.text_overflow",
+      "kind": "deterministic",
+      "category": "layout",
+      "severity": "warning",
+      "slide_index": 12,
+      "element_ids": [
+        "s9_b1"
+      ],
+      "bbox": {
+        "x": 256559,
+        "y": 3689483,
+        "w": 1423651,
+        "h": 327437
+      },
+      "message": "s9_b1: текст не помещается в рамку: помещается 4 строк, занято 5",
+      "fix": {
+        "kind": "assisted",
+        "description": "сократить текст или разнести блоки на два слайда",
+        "action": "shorten_or_split",
+        "params": {
+          "element_id": "s9_b1",
+          "capacity_lines": 4,
+          "used_lines": 5
+        }
+      },
+      "confidence": 1.0
+    }
+  ],
+  "skipped_checks": {
+    "content.body_matches_title": "модель недоступна: вопрос не задан",
+    "content.has_content": "модель недоступна: вопрос не задан",
+    "content.no_prompt_leftovers": "модель недоступна: вопрос не задан",
+    "content.table_rows_serve_point": "модель недоступна: вопрос не задан",
+    "content.visuals_on_topic": "модель недоступна: вопрос не задан",
+    "content.figures_in_sources": "модель недоступна: вопрос не задан",
+    "content.no_typos": "модель недоступна: вопрос не задан",
+    "content.one_sentence_summary": "модель недоступна: вопрос не задан",
+    "content.single_language": "модель недоступна: вопрос не задан",
+    "content.slides_connected": "модель недоступна: вопрос не задан",
+    "content.title_is_takeaway": "модель недоступна: вопрос не задан"
+  }
+}

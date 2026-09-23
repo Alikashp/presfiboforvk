@@ -614,6 +614,7 @@ def test_text_pass_is_asked_once_for_the_whole_deck(
 
     prepared = None
     text_findings = None
+    slides_asked = 0
     for variant in ("dense", "balanced"):
         result = run_variant(
             template_path=template_paths[0],
@@ -628,6 +629,9 @@ def test_text_pass_is_asked_once_for_the_whole_deck(
         )
         prepared = result.prepared
         text_findings = result.text_findings
+        # Число слайдов у вариантов бывает разным: фиттер вправе разбить
+        # переполненный слайд надвое. Считаем по факту, а не по последнему.
+        slides_asked += len(result.deck.slides)
 
     assert vlm.steps.count("audit_deck") == 1, (
         f"проход по тексту задан {vlm.steps.count('audit_deck')} раза: "
@@ -635,7 +639,7 @@ def test_text_pass_is_asked_once_for_the_whole_deck(
     )
     # Картиночный проход, наоборот, обязан идти по каждому варианту: вёрстка
     # у них разная, и видно это только на картинке.
-    assert vlm.steps.count("audit_slide") >= 2 * len(result.deck.slides) - 1
+    assert vlm.steps.count("audit_slide") == slides_asked
 
 
 def test_identical_findings_are_collapsed(clean, pack):
