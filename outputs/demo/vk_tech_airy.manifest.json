@@ -1,7 +1,7 @@
 {
-  "run_id": "run-20260923-092316",
-  "started_at": "2026-09-23T09:23:16.297803Z",
-  "finished_at": "2026-09-23T09:23:28.065451Z",
+  "run_id": "run-20260923-192550",
+  "started_at": "2026-09-23T19:25:50.441628Z",
+  "finished_at": "2026-09-23T19:26:01.698968Z",
   "template_sha256": "cbbe3aa6a21d23cebc4d1383b93dd07a9cea460d683de1903567b616c839485d",
   "template_name": "vk_tech.pptx",
   "seed": 20260101,
@@ -48,7 +48,7 @@
   "timings": [
     {
       "stage": "parse",
-      "seconds": 0.078
+      "seconds": 0.027
     },
     {
       "stage": "plan",
@@ -56,55 +56,55 @@
     },
     {
       "stage": "layout",
-      "seconds": 0.191
+      "seconds": 0.12
     },
     {
       "stage": "render_pptx",
-      "seconds": 1.239
+      "seconds": 1.021
     },
     {
       "stage": "verify_package",
-      "seconds": 0.136
+      "seconds": 0.167
     },
     {
       "stage": "render_pdf",
-      "seconds": 2.889
+      "seconds": 3.161
     },
     {
       "stage": "render_png",
-      "seconds": 0.999
+      "seconds": 0.865
     },
     {
       "stage": "render_html",
-      "seconds": 0.141
+      "seconds": 0.15
     },
     {
       "stage": "audit",
-      "seconds": 0.284
+      "seconds": 0.305
     },
     {
       "stage": "render_pptx",
-      "seconds": 1.237
+      "seconds": 1.039
     },
     {
       "stage": "verify_package",
-      "seconds": 0.139
+      "seconds": 0.119
     },
     {
       "stage": "render_pdf",
-      "seconds": 3.548
+      "seconds": 3.396
     },
     {
       "stage": "render_png",
-      "seconds": 0.463
+      "seconds": 0.409
     },
     {
       "stage": "render_html",
-      "seconds": 0.137
+      "seconds": 0.151
     },
     {
       "stage": "audit",
-      "seconds": 0.284
+      "seconds": 0.327
     }
   ],
   "fix_mode": "auto",
@@ -125,7 +125,7 @@
       ],
       "issues_before": 8,
       "issues_after": 5,
-      "seconds": 5.809
+      "seconds": 5.441
     }
   ],
   "unresolved": [],
@@ -156,10 +156,10 @@
     "блок 'b16' не помещается в рамку на минимальном кегле шкалы (7 pt): помещается 2 строк, занято 4"
   ],
   "artifacts": {
-    "pptx": "outputs/vk_tech/airy/vk_tech_airy.pptx",
-    "pdf": "outputs/vk_tech/airy/vk_tech_airy.pdf",
-    "html": "outputs/vk_tech/airy/vk_tech_airy.html",
-    "audit": "outputs/vk_tech/airy/vk_tech_airy.audit.json",
-    "png_dir": "outputs/vk_tech/airy/png"
+    "pptx": "outputs/dataset/vk_tech/airy/vk_tech_airy.pptx",
+    "pdf": "outputs/dataset/vk_tech/airy/vk_tech_airy.pdf",
+    "html": "outputs/dataset/vk_tech/airy/vk_tech_airy.html",
+    "audit": "outputs/dataset/vk_tech/airy/vk_tech_airy.audit.json",
+    "png_dir": "outputs/dataset/vk_tech/airy/png"
   }
 }

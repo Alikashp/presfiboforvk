@@ -508,6 +508,39 @@ def test_automatic_fix_moves_the_element_back_inside(clean):
     assert slide.index in outcome.changed_slides
 
 
+def test_margin_fix_converges_for_an_element_wider_than_the_margins(clean):
+    """Элемент шире области полей: одного сдвига мало, нужна подгонка размера.
+
+    Так было на `vk_workspace`: график донора на всю ширину слайда. Сдвинутый
+    к левому полю, он вылезал за правое, находка возвращалась, и правка
+    «применялась» на каждой итерации впустую.
+    """
+    if clean.spec.grid is None:
+        pytest.skip("у шаблона нет полей")
+    deck = clean.deck.model_copy(deep=True)
+    slide = deck.slides[0]
+    element = next(
+        e for e in slide.all_elements() if e.role not in geometry._MARGIN_EXEMPT
+    )
+    element.box = Box(x=0, y=element.box.y, w=deck.slide_width_emu, h=element.box.h)
+    issues = [
+        issue
+        for issue in geometry.margins(slide, deck, clean.spec)
+        if element.id in issue.element_ids
+    ]
+    assert issues, "проверка полей не заметила элемент на всю ширину"
+
+    outcome = fixers.apply(deck, issues, clean.spec)
+
+    assert outcome.applied
+    left_over = [
+        issue
+        for issue in geometry.margins(slide, deck, clean.spec)
+        if element.id in issue.element_ids
+    ]
+    assert left_over == [], "правка применена, а находка осталась"
+
+
 def test_assisted_findings_are_left_to_the_human(clean):
     """Пользователь выбирает, что исправить: сокращать текст за него нельзя."""
     deck = clean.deck.model_copy(deep=True)

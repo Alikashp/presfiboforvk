@@ -178,7 +178,7 @@ def test_plan_is_requested_once_for_all_variants(
     assert plans[0] == plans[1] == plans[2], "варианты разложили разные планы"
 
 
-def test_run_needs_nothing_but_a_config_file(template_paths, tmp_path, monkeypatch):
+def test_run_needs_nothing_but_a_config_file(template_paths, tmp_path, monkeypatch, capsys):
     """A22: воспроизводимый запуск одной командой с конфиг-файлом.
 
     Что собиралось, видно из файла конфига, а не из истории команд.
@@ -208,3 +208,19 @@ def test_run_needs_nothing_but_a_config_file(template_paths, tmp_path, monkeypat
 
     assert code == 0
     assert list((tmp_path / "out" / "balanced").glob("*.pptx")), "колода не собралась"
+
+    # A18: разбор и генерация видны раздельно, с бюджетом сверяется генерация.
+    import json
+
+    from deckwright.schemas import RunSummary
+
+    summary = RunSummary.model_validate(
+        json.loads((tmp_path / "out" / "run-summary.json").read_text("utf-8"))
+    )
+    assert summary.parse_seconds > 0
+    assert summary.generation_seconds > 0
+    assert summary.parse_seconds + summary.generation_seconds == pytest.approx(
+        summary.total_seconds, abs=0.01
+    )
+    out = capsys.readouterr().out
+    assert "разбор входа" in out and "генерация вариантов" in out

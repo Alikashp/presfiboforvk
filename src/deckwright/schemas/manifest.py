@@ -45,6 +45,9 @@ class ModelUsage(BaseModel):
     # попадает в манифест, а не остаётся в логе.
     retries: int = Field(default=0, ge=0)
     rate_limit_hits: int = Field(default=0, ge=0)
+    # Самый долгий вызов, с повторами SDK внутри. Дольше таймаута — значит,
+    # был повтор, которого счётчики выше не видят.
+    slowest_call_seconds: float = Field(default=0.0, ge=0)
     cost_usd: float = Field(default=0.0, ge=0)
     # Ответы, в которых пришёл блок рассуждений. Модели семейства Qwen3 умеют
     # его выдавать, и тогда ответ перестаёт быть чистым JSON.
@@ -96,13 +99,19 @@ class FontSubstitution(BaseModel):
     reason: str
 
 
-class RunSummary(BaseModel):
-    """Прогон целиком: сколько заняли все варианты вместе.
+# Этапы разбора входящих данных. В бюджет времени они не входят (уточнение
+# организаторов): ограничение — на генерацию, а не на чтение шаблона.
+INPUT_STAGES = frozenset({"parse"})
 
-    Бюджет пяти минут ТЗ считает на одну презентацию, и его держит
-    `RunManifest.within_budget` по каждому варианту. Но на демонстрации три
-    варианта запускаются разом, и общее время видно зрителю — значит оно
-    обязано быть измерено и записано, а не оценено на глаз.
+
+class RunSummary(BaseModel):
+    """Прогон целиком: разбор входа отдельно, генерация трёх вариантов отдельно.
+
+    Критерий A18 после уточнения организаторов: в 300 с укладывается
+    **генерация трёх вариантов вместе**. Разбор входящих данных — шаблона и
+    контент-пакета — в бюджет не входит, ограничений по нему нет. Поэтому
+    время разбора записывается рядом, но с бюджетом сверяется только
+    `generation_seconds`.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -111,20 +120,21 @@ class RunSummary(BaseModel):
     template_name: str
     started_at: datetime
     finished_at: datetime
-    # {вариант: секунды по его собственному манифесту}
+    # {вариант: секунды генерации по его собственному манифесту, без разбора}
     variant_seconds: dict[str, float] = Field(default_factory=dict)
-    # Время от запуска до последнего артефакта, включая всё между вариантами.
+    # Разбор входа: чтение и проверка контент-пакета, разбор шаблона.
+    parse_seconds: float = Field(ge=0)
+    # Генерация всех вариантов по часам, от конца разбора до последнего
+    # артефакта: план, вёрстка, сборка, аудит, цикл исправления.
+    generation_seconds: float = Field(ge=0)
     total_seconds: float = Field(ge=0)
-    budget_seconds_per_deck: int = Field(gt=0)
+    # Бюджет на генерацию всех вариантов вместе (A18).
+    budget_seconds: int = Field(gt=0)
 
     @property
-    def slowest_variant(self) -> float:
-        return max(self.variant_seconds.values(), default=0.0)
-
-    @property
-    def every_deck_within_budget(self) -> bool:
-        """Критерий A18: бюджет на одну презентацию, а не на прогон."""
-        return self.slowest_variant <= self.budget_seconds_per_deck
+    def within_budget(self) -> bool:
+        """Критерий A18: генерация трёх вариантов, без разбора входа."""
+        return self.generation_seconds <= self.budget_seconds
 
 
 class RunManifest(BaseModel):
@@ -160,9 +170,22 @@ class RunManifest(BaseModel):
         return round(sum(t.seconds for t in self.timings), 3)
 
     @property
+    def parse_seconds(self) -> float:
+        return round(sum(t.seconds for t in self.timings if t.stage in INPUT_STAGES), 3)
+
+    @property
+    def generation_seconds(self) -> float:
+        """Время без разбора входа — то, что сверяется с бюджетом (A18)."""
+        return round(self.total_seconds - self.parse_seconds, 3)
+
+    @property
     def total_cost_usd(self) -> float:
         return round(sum(m.cost_usd for m in self.models), 6)
 
     def within_budget(self, budget_seconds: int) -> bool:
-        """Уложился ли прогон в бюджет времени из конфига (A18)."""
-        return self.total_seconds <= budget_seconds
+        """Уложилась ли генерация этого варианта в бюджет (A18).
+
+        Бюджет рассчитан на три варианта вместе, поэтому здесь это
+        необходимое условие, а не достаточное: итог — `RunSummary`.
+        """
+        return self.generation_seconds <= budget_seconds

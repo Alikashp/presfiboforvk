@@ -1,7 +1,7 @@
 {
-  "run_id": "run-20260923-092251",
-  "started_at": "2026-09-23T09:22:51.609267Z",
-  "finished_at": "2026-09-23T09:23:04.197013Z",
+  "run_id": "run-20260923-192525",
+  "started_at": "2026-09-23T19:25:25.475226Z",
+  "finished_at": "2026-09-23T19:25:39.083648Z",
   "template_sha256": "cbbe3aa6a21d23cebc4d1383b93dd07a9cea460d683de1903567b616c839485d",
   "template_name": "vk_tech.pptx",
   "seed": 20260101,
@@ -48,63 +48,63 @@
   "timings": [
     {
       "stage": "parse",
-      "seconds": 0.071
+      "seconds": 1.829
     },
     {
       "stage": "plan",
-      "seconds": 0.003
+      "seconds": 0.002
     },
     {
       "stage": "layout",
+      "seconds": 0.128
+    },
+    {
+      "stage": "render_pptx",
+      "seconds": 1.111
+    },
+    {
+      "stage": "verify_package",
+      "seconds": 0.137
+    },
+    {
+      "stage": "render_pdf",
+      "seconds": 3.348
+    },
+    {
+      "stage": "render_png",
+      "seconds": 0.925
+    },
+    {
+      "stage": "render_html",
+      "seconds": 0.147
+    },
+    {
+      "stage": "audit",
+      "seconds": 0.286
+    },
+    {
+      "stage": "render_pptx",
+      "seconds": 1.166
+    },
+    {
+      "stage": "verify_package",
       "seconds": 0.154
     },
     {
-      "stage": "render_pptx",
-      "seconds": 1.31
-    },
-    {
-      "stage": "verify_package",
-      "seconds": 0.153
-    },
-    {
       "stage": "render_pdf",
-      "seconds": 3.456
+      "seconds": 3.704
     },
     {
       "stage": "render_png",
-      "seconds": 1.23
+      "seconds": 0.225
     },
     {
       "stage": "render_html",
-      "seconds": 0.164
+      "seconds": 0.151
     },
     {
       "stage": "audit",
-      "seconds": 0.321
-    },
-    {
-      "stage": "render_pptx",
-      "seconds": 1.325
-    },
-    {
-      "stage": "verify_package",
-      "seconds": 0.145
-    },
-    {
-      "stage": "render_pdf",
-      "seconds": 3.484
-    },
-    {
-      "stage": "render_png",
-      "seconds": 0.295
-    },
-    {
-      "stage": "render_html",
-      "seconds": 0.149
-    },
-    {
-      "stage": "audit",
-      "seconds": 0.299
+      "seconds": 0.269
     }
   ],
   "fix_mode": "auto",
@@ -125,7 +125,7 @@
       ],
       "issues_before": 6,
       "issues_after": 3,
-      "seconds": 5.698
+      "seconds": 5.669
     }
   ],
   "unresolved": [],
@@ -154,10 +154,10 @@
     "блок 'b15' не помещается в рамку на минимальном кегле шкалы (4.14 pt): помещается 4 строк, занято 5"
   ],
   "artifacts": {
-    "pptx": "outputs/vk_tech/dense/vk_tech_dense.pptx",
-    "pdf": "outputs/vk_tech/dense/vk_tech_dense.pdf",
-    "html": "outputs/vk_tech/dense/vk_tech_dense.html",
-    "audit": "outputs/vk_tech/dense/vk_tech_dense.audit.json",
-    "png_dir": "outputs/vk_tech/dense/png"
+    "pptx": "outputs/dataset/vk_tech/dense/vk_tech_dense.pptx",
+    "pdf": "outputs/dataset/vk_tech/dense/vk_tech_dense.pdf",
+    "html": "outputs/dataset/vk_tech/dense/vk_tech_dense.html",
+    "audit": "outputs/dataset/vk_tech/dense/vk_tech_dense.audit.json",
+    "png_dir": "outputs/dataset/vk_tech/dense/png"
   }
 }
