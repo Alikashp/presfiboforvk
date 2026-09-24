@@ -25,6 +25,7 @@ from deckwright.layout.text_metrics import (
     DEFAULT_LINE_HEIGHT,
     FRAME_INSET_X_EMU,
     FRAME_INSET_Y_EMU,
+    MEASUREMENT_SLACK,
     FontMetrics,
     measure_height_emu,
     wrap,
@@ -63,6 +64,18 @@ def _height_emu(
     lines = wrap(text, metrics, size_pt, usable_width)
     height = measure_height_emu(text, metrics, size_pt, box.w, line_height)
     return height, len(lines)
+
+
+def _words_fit(text: str, metrics: FontMetrics, size_pt: float, box: Box) -> bool:
+    """Помещается ли самое длинное слово в строку рамки.
+
+    `wrap` слово длиннее строки не режет и считает одной строкой, а
+    LibreOffice при растеризации режет его посреди: на `vk_tech`
+    «обнаруже / ния». По высоте такой текст «влезает», глазами — нет. Кегль,
+    на котором слово шире строки, влезающим не считается.
+    """
+    limit = max(1, box.w - FRAME_INSET_X_EMU) / MEASUREMENT_SLACK
+    return all(metrics.width_emu(word, size_pt) <= limit for word in text.split())
 
 
 def capacity_lines(
@@ -105,7 +118,7 @@ def fit_size(
     last_height, last_lines = 0, 0
     for steps_down, size in enumerate(reversed(steps)):
         height, lines = _height_emu(text, metrics, size, box, line_height)
-        if height <= usable_height:
+        if height <= usable_height and _words_fit(text, metrics, size, box):
             return FitResult(
                 size_pt=size,
                 fits=True,
@@ -149,7 +162,9 @@ def fit_paragraphs(
             height, count = _height_emu(line, metrics, size, box, line_height)
             total_height += height
             total_lines += count
-        if total_height <= usable_height:
+        if total_height <= usable_height and all(
+            _words_fit(line, metrics, size, box) for line in lines
+        ):
             return FitResult(
                 size_pt=size,
                 fits=True,

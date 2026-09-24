@@ -1,7 +1,7 @@
 {
-  "run_id": "run-20260923-192706",
-  "started_at": "2026-09-23T19:27:06.118603Z",
-  "finished_at": "2026-09-23T19:27:16.188267Z",
+  "run_id": "run-20260924-134403",
+  "started_at": "2026-09-24T13:44:03.074608Z",
+  "finished_at": "2026-09-24T13:44:10.060863Z",
   "template_sha256": "9ef2323ed5f49f464aee5ae7065f1f57bb92c8be3a635be507d59819e285cfe0",
   "template_name": "vk_education.pptx",
   "seed": 20260101,
@@ -40,6 +40,7 @@
       "completion_tokens": 0,
       "retries": 0,
       "rate_limit_hits": 0,
+      "slowest_call_seconds": 0.0,
       "cost_usd": 0.0,
       "thinking_blocks": 0,
       "mocked": true
@@ -48,7 +49,7 @@
   "timings": [
     {
       "stage": "parse",
-      "seconds": 0.025
+      "seconds": 0.145
     },
     {
       "stage": "plan",
@@ -56,80 +57,35 @@
     },
     {
       "stage": "layout",
-      "seconds": 0.063
+      "seconds": 0.272
     },
     {
       "stage": "render_pptx",
-      "seconds": 0.837
+      "seconds": 0.918
     },
     {
       "stage": "verify_package",
-      "seconds": 0.115
+      "seconds": 0.153
     },
     {
       "stage": "render_pdf",
-      "seconds": 2.973
+      "seconds": 3.698
     },
     {
       "stage": "render_png",
-      "seconds": 1.228
+      "seconds": 1.462
     },
     {
       "stage": "render_html",
-      "seconds": 0.098
+      "seconds": 0.111
     },
     {
       "stage": "audit",
-      "seconds": 0.188
-    },
-    {
-      "stage": "render_pptx",
-      "seconds": 0.901
-    },
-    {
-      "stage": "verify_package",
-      "seconds": 0.094
-    },
-    {
-      "stage": "render_pdf",
-      "seconds": 2.945
-    },
-    {
-      "stage": "render_png",
-      "seconds": 0.279
-    },
-    {
-      "stage": "render_html",
-      "seconds": 0.1
-    },
-    {
-      "stage": "audit",
-      "seconds": 0.22
+      "seconds": 0.229
     }
   ],
   "fix_mode": "auto",
-  "fix_iterations": [
-    {
-      "number": 1,
-      "applied": [
-        "1:layout.margin_violation:s1_title",
-        "1:layout.margin_violation:s1_b0",
-        "10:layout.margin_violation:s8_title",
-        "12:layout.margin_violation:s10_title",
-        "12:layout.margin_violation:s10_b0"
-      ],
-      "skipped": {},
-      "rewritten_slides": [],
-      "rechecked_slides": [
-        1,
-        10,
-        12
-      ],
-      "issues_before": 14,
-      "issues_after": 9,
-      "seconds": 4.54
-    }
-  ],
+  "fix_iterations": [],
   "unresolved": [],
   "font_substitutions": [
     {
@@ -146,15 +102,14 @@
   "warnings": [
     "шрифты не встроены в шаблон и будут подставлены системой, метрики могут разойтись: Arial, Consolas",
     "бюджет длины (шрифт шаблона Play): заголовок 47 симв, пункт 63 симв, до 6 пунктов",
-    "блок 'b1' не помещается в рамку на минимальном кегле шкалы (12 pt): помещается 2 строк, занято 4",
+    "блок 'b4' не помещается в рамку на минимальном кегле шкалы (12 pt): помещается 2 строк, занято 4",
     "блок 'b6' не помещается в рамку на минимальном кегле шкалы (12 pt): помещается 2 строк, занято 4",
     "блок 'b7' не помещается в рамку на минимальном кегле шкалы (12 pt): помещается 3 строк, занято 4",
     "блок 'b8' не помещается в рамку на минимальном кегле шкалы (12 pt): помещается 2 строк, занято 4",
     "блок 'b11' не помещается в рамку на минимальном кегле шкалы (12 pt): помещается 3 строк, занято 4",
     "блок 'b12' не помещается в рамку на минимальном кегле шкалы (12 pt): помещается 2 строк, занято 4",
     "блок 'b14' не помещается в рамку на минимальном кегле шкалы (12 pt): помещается 3 строк, занято 5",
-    "блок 'b15' не помещается в рамку на минимальном кегле шкалы (12 pt): помещается 2 строк, занято 4",
-    "блок 'b16' не помещается в рамку на минимальном кегле шкалы (12 pt): помещается 2 строк, занято 4"
+    "блок 'b15' не помещается в рамку на минимальном кегле шкалы (12 pt): помещается 2 строк, занято 4"
   ],
   "artifacts": {
     "pptx": "outputs/dataset/vk_education/airy/vk_education_airy.pptx",

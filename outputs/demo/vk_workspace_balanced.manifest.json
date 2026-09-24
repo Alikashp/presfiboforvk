@@ -1,7 +1,7 @@
 {
-  "run_id": "run-20260923-192611",
-  "started_at": "2026-09-23T19:26:11.373567Z",
-  "finished_at": "2026-09-23T19:26:26.599706Z",
+  "run_id": "run-20260924-134308",
+  "started_at": "2026-09-24T13:43:08.533486Z",
+  "finished_at": "2026-09-24T13:43:23.999190Z",
   "template_sha256": "1b8883114486c69dff706e9c4fd9382727c4506c2cfa3ec34f86987f1e852f2f",
   "template_name": "vk_workspace.pptx",
   "seed": 20260101,
@@ -40,6 +40,7 @@
       "completion_tokens": 0,
       "retries": 0,
       "rate_limit_hits": 0,
+      "slowest_call_seconds": 0.0,
       "cost_usd": 0.0,
       "thinking_blocks": 0,
       "mocked": true
@@ -48,7 +49,7 @@
   "timings": [
     {
       "stage": "parse",
-      "seconds": 0.016
+      "seconds": 0.014
     },
     {
       "stage": "plan",
@@ -56,55 +57,55 @@
     },
     {
       "stage": "layout",
-      "seconds": 0.039
+      "seconds": 0.075
     },
     {
       "stage": "render_pptx",
-      "seconds": 0.512
+      "seconds": 0.518
     },
     {
       "stage": "verify_package",
-      "seconds": 0.065
+      "seconds": 0.084
     },
     {
       "stage": "render_pdf",
-      "seconds": 4.223
+      "seconds": 4.222
     },
     {
       "stage": "render_png",
-      "seconds": 4.374
+      "seconds": 4.532
     },
     {
       "stage": "render_html",
-      "seconds": 0.138
+      "seconds": 0.166
     },
     {
       "stage": "audit",
-      "seconds": 0.121
+      "seconds": 0.137
     },
     {
       "stage": "render_pptx",
-      "seconds": 0.44
+      "seconds": 0.478
     },
     {
       "stage": "verify_package",
-      "seconds": 0.083
+      "seconds": 0.075
     },
     {
       "stage": "render_pdf",
-      "seconds": 3.995
+      "seconds": 4.004
     },
     {
       "stage": "render_png",
-      "seconds": 0.954
+      "seconds": 0.821
     },
     {
       "stage": "render_html",
-      "seconds": 0.12
+      "seconds": 0.132
     },
     {
       "stage": "audit",
-      "seconds": 0.145
+      "seconds": 0.209
     }
   ],
   "fix_mode": "auto",
@@ -122,7 +123,7 @@
       ],
       "issues_before": 21,
       "issues_after": 19,
-      "seconds": 5.739
+      "seconds": 5.718
     }
   ],
   "unresolved": [],

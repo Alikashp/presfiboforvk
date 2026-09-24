@@ -208,3 +208,32 @@ def test_shorter_deck_leaves_no_stale_pages(exported, tmp_path):
     again = pdf_to_png(result.pdf, directory, dpi=48, only_pages={1})
     assert not stale.exists(), "осталась страница от прошлой, более длинной сборки"
     assert len(again) == len(pages)
+
+
+def test_pdf_is_drawn_in_the_templates_own_font(exported):
+    """Картинка рисуется тем шрифтом, которым фиттер мерил текст.
+
+    Без этого `vk_tech` рисовался DejaVu Sans вместо Play: шире, и текст,
+    честно уложенный по метрикам Play, на картинке рвал слова посередине.
+    """
+    import shutil
+    import subprocess
+
+    if shutil.which("pdffonts") is None:
+        pytest.skip("pdffonts не установлен")
+    checked = 0
+    for name, result in exported:
+        embedded = {
+            token.family.replace(" ", "")
+            for token in result.spec.fonts
+            if token.embedded and token.file_path
+        }
+        if not embedded:
+            continue
+        listing = subprocess.run(
+            ["pdffonts", str(result.pdf)], capture_output=True, text=True, check=True
+        ).stdout.replace(" ", "")
+        assert any(family in listing for family in embedded), f"{name}: {listing[:300]}"
+        checked += 1
+    if not checked:
+        pytest.skip("ни в одном шаблоне нет встроенных шрифтов")

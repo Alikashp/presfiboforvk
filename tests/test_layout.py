@@ -365,3 +365,129 @@ def test_deck_is_set_in_the_templates_own_colours(template_paths):
         f"колода набрана цветами, которых в шаблоне нет: {sorted(invented)}; "
         f"палитра шаблона: {sorted(palette)}"
     )
+
+
+# ── Ёмкость композиции (шаг 1: бюджет длины по макету) ──────────────────────
+
+
+@pytest.fixture(scope="module")
+def live_plan() -> DeckPlan:
+    """Живой план из LLM probe #12 на `vk_tech`: то, что увидит жюри."""
+    path = Path(__file__).parent / "fixtures" / "recorded_live" / "plan_deck.json"
+    return DeckPlan.model_validate(json.loads(path.read_text("utf-8")))
+
+
+def _overflowing(issues) -> set[int]:
+    return {issue.slide_index for issue in issues if issue.check_id == "layout.text_overflow"}
+
+
+def test_composition_is_chosen_where_the_text_fits(specs, live_plan):
+    """Если в шаблоне есть композиция, куда слайд влезает, он туда и ложится.
+
+    До этого выбор мерил только заголовок: на живом плане #12 повестка из
+    пяти пунктов шла в рамку на две строки, хотя рядом были рамки на пять —
+    37 переполненных слайдов из 90 на трёх шаблонах датасета.
+    """
+    from deckwright.layout.matcher import _blocks_fit, _title_fits, _usable_slots
+
+    cfg = load_config(CONFIG)
+    for name, spec in specs:
+        metrics = metrics_for_spec(spec).metrics
+        ladders = {role: ladder_for_role(spec, role) for role in SlotRole}
+        for variant in VARIANTS:
+            preset = cfg.variant(variant)
+            strategy = Strategy.from_config(preset)
+            deck, issues = build_deck_ir(spec, live_plan, preset)
+            if len(deck.slides) != len(live_plan.slides):
+                continue  # деление сдвинуло номера — сверять не с чем
+            over = _overflowing(issues)
+            for slide in live_plan.slides:
+                could_fit = any(
+                    _usable_slots(pattern, spec.slide_width_emu, spec.slide_height_emu)
+                    and _title_fits(pattern, slide, strategy, metrics, ladders[SlotRole.TITLE])
+                    and _blocks_fit(pattern, spec, slide, strategy, metrics, ladders)
+                    for pattern in spec.patterns
+                )
+                if could_fit:
+                    assert slide.index not in over, (
+                        f"{name}/{variant}: слайд {slide.index} переполнен, "
+                        "хотя в шаблоне есть композиция, куда он влезает"
+                    )
+
+
+def test_chart_never_lands_in_a_caption_sized_frame(specs, live_plan):
+    """График в рамке подписи «влезает» по тексту и не виден на слайде."""
+    from deckwright.schemas import ElementKind
+
+    cfg = load_config(CONFIG)
+    for name, spec in specs:
+        for variant in VARIANTS:
+            deck, _ = build_deck_ir(spec, live_plan, cfg.variant(variant))
+            for slide in deck.slides:
+                for element in slide.all_elements():
+                    if element.kind is ElementKind.CHART:
+                        assert element.box.h >= deck.slide_height_emu * 0.25, (
+                            f"{name}/{variant}: график на слайде {slide.index} "
+                            f"высотой {element.box.h / 914400:.2f} дюйма"
+                        )
+
+
+def test_variants_avoid_each_others_compositions(specs, live_plan):
+    """A12: общий реестр не даёт вариантам съехаться на одни композиции.
+
+    Сравнение — с независимой сборкой тех же вариантов: с реестром
+    совпадений на тех же местах не больше, чем без него.
+    """
+    cfg = load_config(CONFIG)
+
+    def same_places(spec, siblings) -> int:
+        decks = [
+            build_deck_ir(spec, live_plan, cfg.variant(v), siblings=siblings)[0]
+            for v in VARIANTS
+        ]
+        ids = [[s.pattern_id for s in deck.slides] for deck in decks]
+        return sum(
+            1
+            for a in range(len(ids))
+            for b in range(a + 1, len(ids))
+            for x, y in zip(ids[a], ids[b], strict=False)
+            if x == y
+        )
+
+    for name, spec in specs:
+        assert same_places(spec, {}) <= same_places(spec, None), name
+
+
+def test_rebuild_keeps_its_own_compositions(specs, live_plan):
+    """Пересборка в цикле исправления не избегает собственного выбора."""
+    cfg = load_config(CONFIG)
+    for name, spec in specs:
+        siblings: dict = {}
+        first = [
+            build_deck_ir(spec, live_plan, cfg.variant(v), siblings=siblings)[0]
+            for v in VARIANTS
+        ]
+        again, _ = build_deck_ir(spec, live_plan, cfg.variant(VARIANTS[-1]), siblings=siblings)
+        assert [s.pattern_id for s in again.slides] == [
+            s.pattern_id for s in first[-1].slides
+        ], name
+
+
+def test_word_wider_than_the_line_does_not_fit():
+    """Рендер режет такое слово посередине — «обнаруже / ния»."""
+    metrics = _metrics()
+    word = "обнаружения"
+    size = 24.0
+    width = metrics.width_emu(word, size)
+    box = Box(x=0, y=0, w=int(width * 0.8), h=914400 * 5)
+    assert not fit_size(word, metrics, box, [size], size).fits
+    assert not fit_paragraphs([word], metrics, box, [size], size).fits
+
+
+def test_lists_are_read_at_the_body_size_of_the_template(specs):
+    """У списков нет своих слотов — читаться они обязаны как тело текста."""
+    from deckwright.layout.strategy import role_typical
+
+    for name, spec in specs:
+        if role_typical(spec, SlotRole.BODY):
+            assert role_typical(spec, SlotRole.BULLETS) > 0, name

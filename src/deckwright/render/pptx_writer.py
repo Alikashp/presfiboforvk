@@ -103,6 +103,12 @@ def _fill_text_frame(text_frame, element: Element, *, styled: bool) -> None:
         run.text = paragraph.text
         if styled:
             _apply_style(run, paragraph.style)
+            # Интервал — одинарный, явно. Иначе абзац наследует интервал
+            # донора, подобранный под его текст: на `vk_tech` это 16 % под
+            # цифру кеглем 166 pt, и наш текст кеглем 32 pt ложился строка на
+            # строку. Одинарный интервал — это 1.2 кегля, ровно то, чем
+            # фиттер мерит «влезает»: картинка обязана совпадать с моделью.
+            target.line_spacing = 1.0
 
 
 def _placeholder_by_role(slide, role: SlotRole):
@@ -184,12 +190,14 @@ def _render_element(
         # уступает настоящему графику, а не просвечивает из-под него.
         _take_matching_shape(candidates, element.box)
         _remove_shape_at(slide, element.box)
+        _clear_under_data(slide, element.box, candidates)
         add_chart(slide, element.box, element.chart)
         return element.box
 
     if element.kind is ElementKind.TABLE and element.table is not None:
         _take_matching_shape(candidates, element.box)
         _remove_shape_at(slide, element.box)
+        _clear_under_data(slide, element.box, candidates)
         add_table(
             slide,
             element.box,
@@ -353,6 +361,54 @@ def _remove_shape_at(slide, box: Box) -> bool:
             parent.remove(element)
             return True
     return False
+
+
+# Какая доля площади фигуры донора должна лежать внутри рамки графика или
+# таблицы, чтобы фигура считалась «под данными» и убиралась. Больше половины:
+# подложка-карточка, в которую график вписан, крупнее его и остаётся.
+_UNDER_DATA_SHARE = 0.6
+
+
+def _clear_under_data(slide, box: Box, candidates: list[tuple[Box, object]]) -> int:
+    """Убирает фигуры донора, которые окажутся под графиком или таблицей.
+
+    У графика прозрачный фон, и всё, что под ним, просвечивает. На `vk_tech`
+    так выглядела «чёрная заливка» из прогона #12: график лёг поверх тёмной
+    панели донора, подписи осей и заголовок — чёрные на чёрном. И так же —
+    кольцо логотипов и надпись «Группа VK» поверх столбцов. Цвет здесь не
+    поможет: под графиком половина светлая, половина тёмная, и читаемого на
+    обеих цвета нет. Убирается то, что под данными, а не перекрашиваются
+    данные.
+    """
+    removed = 0
+    # Текстовая фигура, которой уже нет среди кандидатов, занята нашим
+    # содержанием — например, заголовком слайда. Её не трогаем.
+    free_text = {shape._element for _, shape in candidates}
+    for element, shape_box, _ in list(iter_shapes(slide.shapes._spTree)):
+        if shape_box is None or shape_box.w <= 0 or shape_box.h <= 0:
+            continue
+        if (
+            element not in free_text
+            and element.xpath(".//*[local-name()='txBody']")
+            and element.xpath(".//*[local-name()='t']/text()")
+        ):
+            continue
+        inside_w = min(shape_box.right, box.right) - max(shape_box.x, box.x)
+        inside_h = min(shape_box.bottom, box.bottom) - max(shape_box.y, box.y)
+        if inside_w <= 0 or inside_h <= 0:
+            continue
+        if inside_w * inside_h < _UNDER_DATA_SHARE * shape_box.w * shape_box.h:
+            continue
+        parent = element.getparent()
+        if parent is None:
+            continue
+        parent.remove(element)
+        removed += 1
+        # Убранная фигура не должна достаться следующему элементу слайда.
+        candidates[:] = [
+            (cbox, shape) for cbox, shape in candidates if shape._element is not element
+        ]
+    return removed
 
 
 def _drop_unfilled_data_frames(slide, filled: list[Box]) -> int:

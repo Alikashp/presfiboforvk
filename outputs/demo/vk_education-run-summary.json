@@ -1,15 +1,15 @@
 {
-  "run_id": "run-20260923-192643",
+  "run_id": "run-20260924-134340",
   "template_name": "vk_education.pptx",
-  "started_at": "2026-09-23T19:26:43.133575Z",
-  "finished_at": "2026-09-23T19:27:16.191116Z",
+  "started_at": "2026-09-24T13:43:40.652877Z",
+  "finished_at": "2026-09-24T13:44:10.062572Z",
   "variant_seconds": {
-    "dense": 10.273,
-    "balanced": 10.496,
-    "airy": 10.041
+    "dense": 10.868,
+    "balanced": 11.443,
+    "airy": 6.843
   },
-  "parse_seconds": 2.205,
-  "generation_seconds": 30.853,
-  "total_seconds": 33.058,
+  "parse_seconds": 0.216,
+  "generation_seconds": 29.194,
+  "total_seconds": 29.41,
   "budget_seconds": 300
 }

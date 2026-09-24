@@ -1,7 +1,7 @@
 {
-  "run_id": "run-20260923-192602",
-  "started_at": "2026-09-23T19:26:02.211248Z",
-  "finished_at": "2026-09-23T19:26:11.372803Z",
+  "run_id": "run-20260924-134259",
+  "started_at": "2026-09-24T13:42:59.129440Z",
+  "finished_at": "2026-09-24T13:43:08.532359Z",
   "template_sha256": "1b8883114486c69dff706e9c4fd9382727c4506c2cfa3ec34f86987f1e852f2f",
   "template_name": "vk_workspace.pptx",
   "seed": 20260101,
@@ -40,6 +40,7 @@
       "completion_tokens": 0,
       "retries": 0,
       "rate_limit_hits": 0,
+      "slowest_call_seconds": 0.0,
       "cost_usd": 0.0,
       "thinking_blocks": 0,
       "mocked": true
@@ -48,7 +49,7 @@
   "timings": [
     {
       "stage": "parse",
-      "seconds": 0.015
+      "seconds": 0.018
     },
     {
       "stage": "plan",
@@ -56,11 +57,11 @@
     },
     {
       "stage": "layout",
-      "seconds": 0.026
+      "seconds": 0.075
     },
     {
       "stage": "render_pptx",
-      "seconds": 0.581
+      "seconds": 0.527
     },
     {
       "stage": "verify_package",
@@ -68,19 +69,19 @@
     },
     {
       "stage": "render_pdf",
-      "seconds": 4.607
+      "seconds": 4.655
     },
     {
       "stage": "render_png",
-      "seconds": 3.44
+      "seconds": 3.646
     },
     {
       "stage": "render_html",
-      "seconds": 0.199
+      "seconds": 0.185
     },
     {
       "stage": "audit",
-      "seconds": 0.178
+      "seconds": 0.174
     }
   ],
   "fix_mode": "auto",
