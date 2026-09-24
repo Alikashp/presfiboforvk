@@ -89,6 +89,46 @@ def scale_ladder(spec: TemplateSpec) -> list[float]:
     return sorted(size for size in sizes if size > 0) or [18.0]
 
 
+def _declared_sizes(spec: TemplateSpec, role: SlotRole) -> list[float]:
+    """Кегли, которыми сам шаблон набирает слоты этой роли."""
+    return [
+        slot.style.size_pt
+        for source in (
+            (slot for layout in spec.layouts for slot in layout.slots),
+            (slot for pattern in spec.patterns for slot in pattern.slots),
+            (
+                slot
+                for pattern in spec.patterns
+                for repeater in pattern.repeaters
+                for slot in repeater.item_slots
+            ),
+        )
+        for slot in source
+        if slot.role is role and slot.style is not None and slot.style.size_pt > 0
+    ]
+
+
+def role_typical(spec: TemplateSpec, role: SlotRole) -> float:
+    """Кегль, которым шаблон обычно набирает эту роль: медиана объявленных.
+
+    Предел роли (`role_floor`) отвечает на «мельче нельзя», а не на «так
+    читают». Текст, влезший только на самой нижней ступени, формально
+    помещается, а на слайде это подпись в 7 pt: так на `vk_tech` пять пунктов
+    повестки уезжали в верхнюю микроподпись. Композиция, где текст влезает
+    типичным кеглем, предпочитается той, где он влезает только минимальным.
+    """
+    sizes = sorted(_declared_sizes(spec, role))
+    if not sizes and role in _BODY_LIKE:
+        # Своих слотов у роли нет — ни в одном из трёх шаблонов датасета нет
+        # слота «список». Такой текст набирается как тело, и читаться обязан
+        # так же: без этого пять пунктов повестки уезжали в подпись 7 pt.
+        sizes = sorted(_declared_sizes(spec, SlotRole.BODY))
+    return sizes[len(sizes) // 2] if sizes else 0.0
+
+
+_BODY_LIKE = frozenset({SlotRole.BULLETS, SlotRole.CAPTION, SlotRole.QUOTE})
+
+
 def role_floor(spec: TemplateSpec, role: SlotRole) -> float:
     """Ниже какого кегля фиттеру нельзя опускаться для этой роли.
 
@@ -104,21 +144,7 @@ def role_floor(spec: TemplateSpec, role: SlotRole) -> float:
     Роль, которой в шаблоне нет вовсе, предела не получает: выдумывать за
     шаблон число неоткуда.
     """
-    sizes = [
-        slot.style.size_pt
-        for source in (
-            (slot for layout in spec.layouts for slot in layout.slots),
-            (slot for pattern in spec.patterns for slot in pattern.slots),
-            (
-                slot
-                for pattern in spec.patterns
-                for repeater in pattern.repeaters
-                for slot in repeater.item_slots
-            ),
-        )
-        for slot in source
-        if slot.role is role and slot.style is not None and slot.style.size_pt > 0
-    ]
+    sizes = _declared_sizes(spec, role)
     return min(sizes) if sizes else 0.0
 
 

@@ -619,3 +619,36 @@ def test_prompt_states_the_real_constraint(holdout_deck):
     text = client.prompts[0]
     assert "помещается" in text and "строк текста" in text, text[:400]
     assert "пунктов остаётся" in text, text[:400]
+
+
+def test_deck_level_finding_is_not_carried_twice(reviewed):
+    """Находка текстового прохода не дублируется после итерации исправления.
+
+    Она числится за слайдом 1, в свежий отчёт входит переиспользованием, и
+    перенос «ответов по непереспрошенным слайдам» добавлял её второй раз —
+    в прогоне #12 так было во всех трёх вариантах.
+    """
+    from deckwright.pipeline import _merge_contextual
+
+    finding = Issue(
+        check_id="content.title_is_takeaway",
+        kind=CheckKind.CONTEXTUAL,
+        category=IssueCategory.CONTENT,
+        severity=Severity.WARNING,
+        slide_index=1,
+        confidence=0.8,
+        message="заголовки описывают тему, а не вывод",
+        fix=ProposedFix(
+            kind=FixKind.ASSISTED,
+            description="переформулировать",
+            action="review_contextual_finding",
+        ),
+    )
+    previous = reviewed.audit.model_copy(deep=True)
+    previous.issues = [finding]
+    fresh = reviewed.audit.model_copy(deep=True)
+    fresh.issues = [finding]
+
+    merged = _merge_contextual(previous, fresh, rechecked={4})
+
+    assert [issue.key for issue in merged.issues].count(finding.key) == 1

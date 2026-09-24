@@ -27,7 +27,7 @@ from __future__ import annotations
 import time
 from collections.abc import Callable
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -122,6 +122,9 @@ class PreparedPlan:
     plan: DeckPlan
     prompt: Prompt
     budget: LengthBudget | None
+    # Какие композиции варианты уже взяли: {вариант: {слайд плана: композиция}}.
+    # По нему следующий вариант избегает чужих композиций (A12).
+    layouts: dict[str, dict[int, str]] = field(default_factory=dict)
 
 
 @dataclass
@@ -142,6 +145,9 @@ class _RunContext:
     text_findings: list[Issue] | None = None
     # Куда сообщать о начале этапа. Нужно интерфейсу: прогон идёт минуты.
     on_stage: Callable[[str], None] | None = None
+    # Реестр композиций вариантов из `PreparedPlan`: пересборка после правки
+    # обязана избегать того же, что и первая сборка.
+    layouts: dict[str, dict[int, str]] | None = None
 
 
 def _step_params(model_cfg, steps: tuple[str, ...]) -> dict[str, dict[str, object]]:
@@ -187,10 +193,17 @@ def _merge_contextual(
     """
     if previous is None or rechecked is None:
         return fresh
+    # Находки текстового прохода относятся к колоде, а числятся за слайдом 1
+    # или 2, и в свежий отчёт они уже вошли переиспользованием. Без сверки по
+    # ключу они переносились второй раз: в прогоне #12 `title_is_takeaway` и
+    # `one_sentence_summary` стояли в отчёте каждого варианта дважды.
+    present = {issue.key for issue in fresh.issues}
     carried = [
         issue
         for issue in previous.issues
-        if issue.kind is CheckKind.CONTEXTUAL and issue.slide_index not in rechecked
+        if issue.kind is CheckKind.CONTEXTUAL
+        and issue.slide_index not in rechecked
+        and issue.key not in present
     ]
     if not carried:
         return fresh
@@ -242,6 +255,13 @@ def _build(
             output_dir,
             soffice_binary=cfg.render.soffice_binary,
             timeout_seconds=cfg.render.soffice_timeout_seconds,
+            # Шрифты, извлечённые из шаблона: иначе картинка рисуется не тем
+            # шрифтом, которым фиттер мерил текст.
+            font_dirs={
+                Path(token.file_path).parent
+                for token in spec.fonts
+                if token.embedded and token.file_path
+            },
         )
 
     with _timed(manifest, "render_png", ctx.on_stage):
@@ -344,7 +364,7 @@ def _fix_iteration(
                 if issue.slide_index in set(outcome.rewritten)
             )
             deck, layout_issues = build_deck_ir(
-                spec, outcome.plan, ctx.preset, pack=ctx.pack
+                spec, outcome.plan, ctx.preset, pack=ctx.pack, siblings=ctx.layouts
             )
             return deck, outcome.plan, set(outcome.rewritten), layout_issues
     elif rewrite_targets:
@@ -636,7 +656,9 @@ def run_variant(
             preset = cfg.variant(variant)
         except KeyError:
             preset = variant
-        deck, layout_issues = build_deck_ir(spec, plan, preset, pack=pack)
+        deck, layout_issues = build_deck_ir(
+            spec, plan, preset, pack=pack, siblings=prepared.layouts
+        )
     # Находки вёрстки о самой себе едут дальше вместе с колодой: текст, не
     # влезший на минимальной ступени шкалы, обязан быть виден, а не обрезан
     # молча.
@@ -654,6 +676,7 @@ def run_variant(
         vlm_client=vlm_client,
         text_findings=text_findings,
         on_stage=on_stage,
+        layouts=prepared.layouts,
     )
     built = _build(deck, plan, spec, pack, ctx, manifest, template_path)
 

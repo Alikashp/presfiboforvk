@@ -179,3 +179,62 @@ def test_image_provider_refuses_loudly():
     with pytest.raises(ImageUnavailable) as failure:
         provider.generate("схема архитектуры", 800, 600, Path("/tmp"))
     assert "схема архитектуры" in str(failure.value)
+
+
+def test_our_text_is_set_single_spaced(rendered):
+    """Абзац, которому мы задали кегль, не наследует интервал донора.
+
+    На `vk_tech` интервал донора 16 % — под цифру кеглем 166 pt. Наш текст
+    кеглем 32 pt с таким интервалом ложился строка на строку, а фиттер,
+    считающий одинарный интервал, был уверен, что всё влезло.
+    """
+    from lxml import etree
+
+    a = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
+    for name, result in rendered:
+        presentation = Presentation(result.pptx)
+        for number, slide in enumerate(presentation.slides, start=1):
+            for paragraph in slide.shapes._spTree.iter(f"{a}p"):
+                styled = paragraph.find(f"{a}r/{a}rPr[@sz]")
+                # Ячейки нативной таблицы создаются с нуля и интервала донора
+                # не наследуют — проверяются только текстовые фигуры.
+                in_table = any(parent.tag == f"{a}tbl" for parent in paragraph.iterancestors())
+                if styled is None or in_table:
+                    continue
+                spacing = paragraph.find(f"{a}pPr/{a}lnSpc/{a}spcPct")
+                assert spacing is not None and spacing.get("val") == "100000", (
+                    f"{name}: слайд {number}: "
+                    f"{etree.tostring(paragraph, encoding=str)[:160]}"
+                )
+
+
+def test_nothing_of_the_donor_shows_through_a_chart():
+    """Под графиком не остаётся декора донора, но наш текст остаётся.
+
+    Чёрная заливка из прогона #12 — это тёмная панель донора под прозрачным
+    графиком: подписи осей чёрные на чёрном.
+    """
+    from pptx.util import Emu
+
+    from deckwright.render.pptx_writer import _clear_under_data
+    from deckwright.schemas import Box
+
+    presentation = Presentation()
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+    inch = 914400
+    panel = slide.shapes.add_shape(1, Emu(5 * inch), Emu(0), Emu(5 * inch), Emu(5 * inch))
+    card = slide.shapes.add_shape(1, Emu(0), Emu(0), Emu(10 * inch), Emu(12 * inch))
+    ours = slide.shapes.add_textbox(Emu(1 * inch), Emu(1 * inch), Emu(3 * inch), Emu(1 * inch))
+    ours.text_frame.text = "Заголовок слайда"
+    unused = slide.shapes.add_textbox(Emu(6 * inch), Emu(1 * inch), Emu(2 * inch), Emu(inch))
+    unused.text_frame.text = "Группа VK"
+    candidates = [(Box(x=6 * inch, y=inch, w=2 * inch, h=inch), unused)]
+
+    removed = _clear_under_data(slide, Box(x=0, y=0, w=10 * inch, h=5 * inch), candidates)
+
+    left = {shape.shape_id for shape in slide.shapes}
+    assert panel.shape_id not in left, "тёмная панель донора осталась под графиком"
+    assert unused.shape_id not in left, "чужая подпись донора осталась под графиком"
+    assert ours.shape_id in left, "убран наш собственный текст"
+    assert card.shape_id in left, "убрана подложка, которая больше графика"
+    assert removed == 2 and candidates == []

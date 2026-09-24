@@ -1,0 +1,304 @@
+{
+  "title": "Платформа наблюдаемости для инженерных команд",
+  "subtitle": "Ускорение обнаружения инцидентов",
+  "purpose": "product",
+  "language": "ru",
+  "slides": [
+    {
+      "index": 1,
+      "intent": "title",
+      "takeaway_title": "Платформа наблюдаемости",
+      "subtitle": "Для инженерных команд",
+      "blocks": [
+        {
+          "id": "b1",
+          "kind": "paragraph",
+          "heading": "",
+          "items": [
+            "Представление продукта для сокращения MTTR"
+          ],
+          "series_ids": [],
+          "fact_ids": [],
+          "quote_id": null,
+          "image_prompt": "",
+          "table": null
+        }
+      ],
+      "speaker_notes": "Титульный слайд. Введение в тему.",
+      "figures": []
+    },
+    {
+      "index": 2,
+      "intent": "agenda",
+      "takeaway_title": "Структура презентации",
+      "subtitle": "План выступления",
+      "blocks": [
+        {
+          "id": "b2",
+          "kind": "bullets",
+          "heading": "",
+          "items": [
+            "Проблема фрагментации данных",
+            "Высокое время обнаружения",
+            "Решение: единая платформа",
+            "Результаты пилотного проекта",
+            "План внедрения и пилот"
+          ],
+          "series_ids": [],
+          "fact_ids": [],
+          "quote_id": null,
+          "image_prompt": "",
+          "table": null
+        }
+      ],
+      "speaker_notes": "Краткий обзор того, что будет рассказано.",
+      "figures": []
+    },
+    {
+      "index": 3,
+      "intent": "problem",
+      "takeaway_title": "Инструменты мониторинга разрознены",
+      "subtitle": "Проблема фрагментации",
+      "blocks": [
+        {
+          "id": "b3",
+          "kind": "kpi",
+          "heading": "Среднее число систем",
+          "items": [
+            "4 системы мониторинга"
+          ],
+          "series_ids": [],
+          "fact_ids": [],
+          "quote_id": null,
+          "image_prompt": "",
+          "table": null
+        }
+      ],
+      "speaker_notes": "Команды используют множество разных инструментов, что усложняет работу.",
+      "figures": [
+        {
+          "text": "4",
+          "kind": "cited",
+          "fact_ids": [
+            "f2"
+          ],
+          "formula": ""
+        }
+      ]
+    },
+    {
+      "index": 4,
+      "intent": "problem",
+      "takeaway_title": "Инциденты обнаруживаются долго",
+      "subtitle": "Текущая метрика MTTR",
+      "blocks": [
+        {
+          "id": "b4",
+          "kind": "kpi",
+          "heading": "Время обнаружения",
+          "items": [
+            "42 минуты в среднем"
+          ],
+          "series_ids": [],
+          "fact_ids": [],
+          "quote_id": null,
+          "image_prompt": "",
+          "table": null
+        }
+      ],
+      "speaker_notes": "Из-за разрозненности данных время реакции на инциденты критически велико.",
+      "figures": [
+        {
+          "text": "42",
+          "kind": "cited",
+          "fact_ids": [
+            "f1"
+          ],
+          "formula": ""
+        }
+      ]
+    },
+    {
+      "index": 5,
+      "intent": "solution",
+      "takeaway_title": "Единая платформа наблюдаемости",
+      "subtitle": "Наше решение",
+      "blocks": [
+        {
+          "id": "b5",
+          "kind": "bullets",
+          "heading": "",
+          "items": [
+            "Агрегация данных из всех систем",
+            "Единый интерфейс для команд",
+            "Автоматическое выявление аномалий",
+            "Сокращение времени поиска причины"
+          ],
+          "series_ids": [],
+          "fact_ids": [],
+          "quote_id": null,
+          "image_prompt": "",
+          "table": null
+        }
+      ],
+      "speaker_notes": "Представляем платформу, которая объединяет все источники данных.",
+      "figures": []
+    },
+    {
+      "index": 6,
+      "intent": "how_it_works",
+      "takeaway_title": "Как работает интеграция",
+      "subtitle": "Архитектура решения",
+      "blocks": [
+        {
+          "id": "b6",
+          "kind": "steps",
+          "heading": "",
+          "items": [
+            "Подключение источников логов",
+            "Сбор метрик и трейсов",
+            "Корреляция событий в реальном времени",
+            "Оповещение инженеров"
+          ],
+          "series_ids": [],
+          "fact_ids": [],
+          "quote_id": null,
+          "image_prompt": "",
+          "table": null
+        }
+      ],
+      "speaker_notes": "Простой процесс подключения и работы с данными.",
+      "figures": []
+    },
+    {
+      "index": 7,
+      "intent": "evidence",
+      "takeaway_title": "Пилот доказал эффективность",
+      "subtitle": "Результаты внедрения",
+      "blocks": [
+        {
+          "id": "b7",
+          "kind": "kpi",
+          "heading": "Время обнаружения после",
+          "items": [
+            "Сокращено до 9 минут"
+          ],
+          "series_ids": [],
+          "fact_ids": [],
+          "quote_id": null,
+          "image_prompt": "",
+          "table": null
+        }
+      ],
+      "speaker_notes": "В ходе пилота в двух командах мы достигли значительного улучшения метрик.",
+      "figures": [
+        {
+          "text": "9",
+          "kind": "cited",
+          "fact_ids": [
+            "f3"
+          ],
+          "formula": ""
+        }
+      ]
+    },
+    {
+      "index": 8,
+      "intent": "evidence",
+      "takeaway_title": "Динамика улучшения метрик",
+      "subtitle": "График снижения MTTR",
+      "blocks": [
+        {
+          "id": "b8",
+          "kind": "series",
+          "heading": "",
+          "items": [],
+          "series_ids": [
+            "ser_mttd"
+          ],
+          "fact_ids": [],
+          "quote_id": null,
+          "image_prompt": "",
+          "table": null
+        }
+      ],
+      "speaker_notes": "Визуализация снижения времени обнаружения с 42 до 9 минут за два месяца.",
+      "figures": [
+        {
+          "text": "42",
+          "kind": "cited",
+          "fact_ids": [
+            "f1"
+          ],
+          "formula": ""
+        },
+        {
+          "text": "21",
+          "kind": "derived",
+          "fact_ids": [
+            "f1",
+            "f3"
+          ],
+          "formula": "(f1 + f3) / 2"
+        },
+        {
+          "text": "9",
+          "kind": "cited",
+          "fact_ids": [
+            "f3"
+          ],
+          "formula": ""
+        }
+      ]
+    },
+    {
+      "index": 9,
+      "intent": "ask",
+      "takeaway_title": "Запуск пилота в вашей команде",
+      "subtitle": "Предложение о сотрудничестве",
+      "blocks": [
+        {
+          "id": "b9",
+          "kind": "bullets",
+          "heading": "",
+          "items": [
+            "Бесплатная настройка платформы",
+            "Обучение инженерной команды",
+            "Поддержка на протяжении 2 месяцев",
+            "Измерение эффекта по метрикам"
+          ],
+          "series_ids": [],
+          "fact_ids": [],
+          "quote_id": null,
+          "image_prompt": "",
+          "table": null
+        }
+      ],
+      "speaker_notes": "Мы предлагаем запустить пилотный проект в вашей команде для проверки гипотез.",
+      "figures": []
+    },
+    {
+      "index": 10,
+      "intent": "closing",
+      "takeaway_title": "Готовы начать пилот?",
+      "subtitle": "Контакты и следующие шаги",
+      "blocks": [
+        {
+          "id": "b10",
+          "kind": "paragraph",
+          "heading": "",
+          "items": [
+            "Свяжитесь с нами для обсуждения деталей"
+          ],
+          "series_ids": [],
+          "fact_ids": [],
+          "quote_id": null,
+          "image_prompt": "",
+          "table": null
+        }
+      ],
+      "speaker_notes": "Завершение презентации. Призыв к действию.",
+      "figures": []
+    }
+  ]
+}

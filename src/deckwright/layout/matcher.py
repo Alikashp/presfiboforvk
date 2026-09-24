@@ -19,7 +19,7 @@
 from __future__ import annotations
 
 from deckwright.layout.fitter import FitResult, fit_paragraphs, fit_size, split_blocks
-from deckwright.layout.strategy import Strategy, ladder_for_role
+from deckwright.layout.strategy import Strategy, ladder_for_role, role_typical
 from deckwright.layout.text_metrics import FontMetrics, metrics_for_spec
 from deckwright.schemas import (
     Box,
@@ -130,6 +130,85 @@ def _title_fits(
     return fit_size(plan_slide.takeaway_title, metrics, slot.box, ladder, start).fits
 
 
+# Роли, для которых «влезает» мерится площадью, а не текстом, и какую долю
+# слайда рамка обязана занимать по каждой стороне. График в рамке подписи
+# формально «влезает» — строка идентификатора ряда короткая, — а на слайде
+# его не видно: так было на `vk_tech`, график 4.7 × 0.7 дюйма. Четверть высоты
+# и треть ширины — нижняя граница, при которой у столбцов остаются оси и
+# подписи.
+_DATA_ROLES = frozenset({SlotRole.CHART, SlotRole.TABLE, SlotRole.IMAGE})
+_DATA_MIN_HEIGHT_SHARE = 0.25
+_DATA_MIN_WIDTH_SHARE = 1 / 3
+
+
+def _roomy_for_data(box: Box, spec: TemplateSpec) -> bool:
+    return (
+        box.h >= spec.slide_height_emu * _DATA_MIN_HEIGHT_SHARE
+        and box.w >= spec.slide_width_emu * _DATA_MIN_WIDTH_SHARE
+    )
+
+
+def _blocks_fit(
+    pattern: Pattern,
+    spec: TemplateSpec,
+    plan_slide: SlidePlan,
+    strategy: Strategy,
+    metrics: FontMetrics | None,
+    ladders: dict[SlotRole, list[float]] | None,
+    typical: dict[SlotRole, float] | None = None,
+) -> bool:
+    """Влезает ли содержание слайда в рамки этой композиции.
+
+    `typical` — строже: текст обязан влезть кеглем не мельче типичного для
+    его роли в этом шаблоне (`role_typical`), а не только минимальным.
+
+    Та же проверка, что `_title_fits`, но для блоков, и тем же порядком, что
+    и сборка слайда: доля занимаемых мест по варианту, подмена ролей, рамки,
+    уже занятые заголовком и соседями, шкала кеглей от стартового вниз.
+
+    Без неё композиция выбиралась по сигнатуре и заголовку, а текст тела не
+    мерился вовсе: на живом плане #12 повестка из пяти пунктов ложилась в
+    рамку на две строки, хотя в том же шаблоне под ту же сигнатуру были
+    рамки на пять. 37 переполненных слайдов из 90.
+    """
+    if metrics is None or not ladders:
+        return True
+    free = _usable_slots(pattern, spec.slide_width_emu, spec.slide_height_emu)
+    allowed = max(1, round(len(free) * strategy.slot_fill_target)) if free else 0
+    free = free[:allowed]
+    title = _title_slot(pattern)
+    taken = [title.box] if title is not None else []
+    for block in plan_slide.blocks:
+        lines = _block_lines(block)
+        if not lines:
+            continue
+        role = strategy.role_for(block)
+        slot = _assign(free, role, taken)
+        if slot is None:
+            # Блок без места уходит в запасную полосу — это уже не
+            # композиция шаблона, а вынужденная мера.
+            return False
+        if role in _DATA_ROLES:
+            if not _roomy_for_data(slot.box, spec):
+                return False
+            taken.append(slot.box)
+            continue
+        ladder = ladders[slot.role]
+        declared = (
+            slot.style.size_pt
+            if slot.style is not None
+            else (ladder[len(ladder) // 2] if ladder else 18.0)
+        )
+        start = strategy.start_size(ladder, declared)
+        fit = fit_paragraphs(lines, metrics, slot.box, ladder, start)
+        if not fit.fits:
+            return False
+        if typical is not None and fit.size_pt < typical.get(role, 0.0):
+            return False
+        taken.append(slot.box)
+    return True
+
+
 def pick_pattern(
     spec: TemplateSpec,
     plan_slide: SlidePlan,
@@ -137,6 +216,8 @@ def pick_pattern(
     used: set[str] | None = None,
     metrics: FontMetrics | None = None,
     title_ladder: list[float] | None = None,
+    ladders: dict[SlotRole, list[float]] | None = None,
+    avoid: set[str] | None = None,
 ) -> Pattern | None:
     """Композиция под сигнатуру слайда, или None, если такой нет.
 
@@ -149,18 +230,60 @@ def pick_pattern(
     одним слайдом, повторённым десять раз.
     """
     used = used or set()
-    title_ladder = title_ladder or []
+    avoid = avoid or set()
+    title_ladder = title_ladder or (ladders or {}).get(SlotRole.TITLE, [])
     needed = needed_profile(plan_slide, strategy)
 
+    typical = {role: role_typical(spec, role) for role in SlotRole}
+
+    def fitting(candidates: list[Pattern]) -> list[Pattern]:
+        """Те, куда влезают и заголовок, и содержание.
+
+        Сначала — где содержание читается типичным кеглем шаблона; если таких
+        нет, где оно влезает хотя бы минимальным.
+        """
+        titled = [
+            pattern
+            for pattern in candidates
+            if _title_fits(pattern, plan_slide, strategy, metrics, title_ladder)
+        ]
+        for strict in (typical, None):
+            found = [
+                pattern
+                for pattern in titled
+                if _blocks_fit(pattern, spec, plan_slide, strategy, metrics, ladders, strict)
+            ]
+            if found:
+                return found
+        return []
+
     def best_of(candidates: list[Pattern]) -> Pattern:
-        """Из подходящих — та, где влезает заголовок и которой ещё не было."""
-        roomy = [
+        """Порядок решений: влезает текст → ещё не было в колоде → вариант.
+
+        «Влезает» стоит первым сознательно. Разнообразие композиций ценно,
+        но слайд, где текст не помещается, модель со зрением в #12 видела
+        пустым — «только заголовок и пустые маркеры». Предпочтение варианта
+        сохраняется порядком кандидатов внутри каждой ступени.
+        """
+        roomy = fitting(candidates) or [
             pattern
             for pattern in candidates
             if _title_fits(pattern, plan_slide, strategy, metrics, title_ladder)
         ] or candidates
-        fresh = [pattern for pattern in roomy if pattern.id not in used]
-        return (fresh or roomy)[0]
+        order = {cls: rank for rank, cls in enumerate(strategy.pattern_preference)}
+
+        def key(pattern: Pattern) -> tuple[bool, bool, int]:
+            # `avoid` — композиции, которые для этого слайда уже взяли другие
+            # варианты. Варианты строятся независимо, и там, где влезающих
+            # композиций мало, два из них брали одну и ту же: на `vk_tech`
+            # dense и balanced совпали на всех десяти слайдах (A12).
+            return (
+                pattern.id in avoid,
+                pattern.id in used,
+                order.get(pattern.pattern_class, len(order)),
+            )
+
+        return min(roomy, key=key)
     preferred = None
     for candidate in strategy.pattern_preference:
         matches = spec.patterns_matching(needed, preferred=candidate)
@@ -174,7 +297,7 @@ def pick_pattern(
         for pattern in spec.patterns_matching(needed, preferred=preferred)
         if _usable_slots(pattern, spec.slide_width_emu, spec.slide_height_emu)
     ]
-    if matches:
+    if matches and fitting(matches):
         return best_of(matches)
 
     # Мягкий подбор: заголовок плюс сколько-нибудь мест. Здесь порядок решает
@@ -188,6 +311,14 @@ def pick_pattern(
         for pattern in spec.patterns_matching({SlotRole.TITLE: 1}, preferred=preferred)
         if _usable_slots(pattern, spec.slide_width_emu, spec.slide_height_emu)
     ]
+    # Строгой сигнатуры нет или текст в неё не влезает. Композиция с
+    # текстовыми рамками другой роли, куда он влезает, лучше: подмена роли
+    # («абзац» вместо «списка») видна только в коде, переполнение — глазами.
+    roomy = fitting(relaxed)
+    if roomy:
+        return best_of(roomy)
+    if matches:
+        return best_of(matches)
     if not relaxed:
         return None
 
@@ -640,10 +771,11 @@ def build_slide_ir(
     font_family: str,
     used: set[str] | None = None,
     pack=None,
+    avoid: set[str] | None = None,
 ) -> tuple[SlideIR, list[Issue]]:
     """Один слайд: композиция шаблона, заполненная содержанием плана."""
     pattern = pick_pattern(
-        spec, plan_slide, strategy, used, metrics, ladders[SlotRole.TITLE]
+        spec, plan_slide, strategy, used, metrics, ladders[SlotRole.TITLE], ladders, avoid
     )
     layout = pick_layout(spec, plan_slide)
     container = pattern if pattern is not None else layout
@@ -854,11 +986,18 @@ def build_deck_ir(
     variant,
     strategy: Strategy | None = None,
     pack=None,
+    siblings: dict[str, dict[int, str]] | None = None,
 ) -> tuple[DeckIR, list[Issue]]:
     """Колода одного варианта и находки, которые вёрстка завела о себе сама.
 
     `variant` принимается и строкой, и пресетом из конфига: строка означает
     стратегию по умолчанию, и тогда вёрстка ведёт себя как «сбалансированная».
+
+    `siblings` — реестр выбранных композиций, общий для вариантов одного
+    прогона: {вариант: {номер слайда плана: композиция}}. Вариант избегает
+    чужих композиций на том же слайде, если есть другая, куда текст влезает,
+    и дописывает в реестр свои. Своих не избегает: пересборка в цикле
+    исправления обязана выбрать то же, что и в первый раз.
     """
     if strategy is None:
         strategy = (
@@ -884,13 +1023,23 @@ def build_deck_ir(
     slides: list[SlideIR] = []
     issues: list[Issue] = []
     used: set[str] = set()
+    others = [
+        chosen for name, chosen in (siblings or {}).items() if name != variant_name
+    ]
+    mine: dict[int, str] = {}
     for plan_slide in plan.slides:
+        avoid = {chosen[plan_slide.index] for chosen in others if plan_slide.index in chosen}
         built, found = _slides_for(
-            spec, plan_slide, strategy, metrics, ladders, font_family, used, pack
+            spec, plan_slide, strategy, metrics, ladders, font_family, used, pack, avoid
         )
+        if built and built[0].pattern_id:
+            mine[plan_slide.index] = built[0].pattern_id
         slides.extend(built)
         issues.extend(found)
         used.update(s.pattern_id for s in built if s.pattern_id)
+
+    if siblings is not None:
+        siblings[variant_name] = mine
 
     # Индексы обязаны идти подряд: разбиение слайда сдвигает всё, что ниже.
     for position, slide in enumerate(slides, start=1):
@@ -917,6 +1066,7 @@ def _slides_for(
     font_family: str,
     used: set[str],
     pack=None,
+    avoid: set[str] | None = None,
 ) -> tuple[list[SlideIR], list[Issue]]:
     """Слайд, а если он переполнен и деление помогает — два.
 
@@ -932,7 +1082,7 @@ def _slides_for(
     шесть наложений на колоду.
     """
     slide, issues = build_slide_ir(
-        spec, plan_slide, strategy, metrics, ladders, font_family, used, pack
+        spec, plan_slide, strategy, metrics, ladders, font_family, used, pack, avoid
     )
 
     # Переполнение заголовка делением не лечится: у обеих половин заголовок
@@ -967,6 +1117,7 @@ def _slides_for(
             font_family,
             used | {slide.pattern_id or ""},
             pack,
+            avoid,
         )
         # Идентификаторы элементов обязаны остаться уникальными в колоде.
         for element in built.all_elements():
