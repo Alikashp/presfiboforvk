@@ -328,7 +328,7 @@ def test_empty_slide_is_caught(clean, tmp_path):
     assert found and found[0].check_id == "density.slide_too_empty"
 
 
-def test_broken_package_is_caught(clean, tmp_path):
+def test_broken_package_is_caught(clean, tmp_path, template_paths):
     """Битая связь: LibreOffice о ней молчит, PowerPoint требует восстановления.
 
     Ломаем так же, как это происходит по-настоящему: фигура с картинкой
@@ -350,7 +350,12 @@ def test_broken_package_is_caught(clean, tmp_path):
         if picture is not None:
             break
     if picture is None:
-        pytest.skip("в колоде нет картинок — нечем ломать")
+        # В колоде картинок может не оказаться: вёрстка выбрала композиции
+        # без них. Ломать можно и чужую — ссылка всё равно подменяется.
+        picture = _template_picture(template_paths)
+        donor = presentation.slides[0]
+    if picture is None:
+        pytest.skip("ни в колоде, ни в шаблонах нет картинок — нечем ломать")
 
     # Ссылка, которой заведомо нет ни на одном слайде: копирование фигуры
     # само по себе может «повезти» и попасть в существующий идентификатор.
@@ -367,7 +372,19 @@ def test_broken_package_is_caught(clean, tmp_path):
     assert any(i.check_id == "integrity.package_broken" for i in found)
 
 
-def test_slide_that_is_one_picture_is_caught(clean, tmp_path):
+def _template_picture(template_paths):
+    """Первая картинка из шаблонов — материал, когда в колоде картинок нет."""
+    from pptx import Presentation
+
+    for path in template_paths:
+        for slide in Presentation(str(path)).slides:
+            for shape in slide.shapes:
+                if shape.shape_type == 13:
+                    return shape
+    return None
+
+
+def test_slide_that_is_one_picture_is_caught(clean, tmp_path, template_paths):
     """Слайд-картинка ТЗ не засчитывает."""
     from pptx import Presentation
     from pptx.util import Emu
@@ -382,7 +399,10 @@ def test_slide_that_is_one_picture_is_caught(clean, tmp_path):
         if picture:
             break
     if picture is None:
-        pytest.skip("в колоде нет картинок")
+        found = _template_picture(template_paths)
+        picture = found.image.blob if found is not None else None
+    if picture is None:
+        pytest.skip("ни в колоде, ни в шаблонах нет картинок")
 
     import io
 

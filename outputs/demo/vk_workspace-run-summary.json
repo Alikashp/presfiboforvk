@@ -1,15 +1,15 @@
 {
-  "run_id": "run-20260924-134259",
+  "run_id": "run-20260924-205954",
   "template_name": "vk_workspace.pptx",
-  "started_at": "2026-09-24T13:42:59.129275Z",
-  "finished_at": "2026-09-24T13:43:40.154671Z",
+  "started_at": "2026-09-24T20:59:54.694596Z",
+  "finished_at": "2026-09-24T21:00:38.818789Z",
   "variant_seconds": {
-    "dense": 9.356,
-    "balanced": 15.453,
-    "airy": 16.131
+    "dense": 16.719,
+    "balanced": 13.235,
+    "airy": 14.069
   },
-  "parse_seconds": 0.052,
-  "generation_seconds": 40.974,
-  "total_seconds": 41.026,
+  "parse_seconds": 0.071,
+  "generation_seconds": 44.053,
+  "total_seconds": 44.124,
   "budget_seconds": 300
 }

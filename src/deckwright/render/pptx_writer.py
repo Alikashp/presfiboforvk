@@ -28,6 +28,7 @@ from pathlib import Path
 from lxml import etree
 from pptx import Presentation
 from pptx.dml.color import RGBColor
+from pptx.enum.shapes import MSO_SHAPE_TYPE
 from pptx.enum.text import PP_ALIGN
 from pptx.util import Emu, Pt
 
@@ -142,6 +143,14 @@ def _same_box(a: Box, b: Box) -> bool:
     )
 
 
+def _all_shapes(shapes):
+    """Фигуры с раскрытыми группами, на любую глубину."""
+    for shape in shapes:
+        yield shape
+        if getattr(shape, "shape_type", None) == MSO_SHAPE_TYPE.GROUP:
+            yield from _all_shapes(shape.shapes)
+
+
 def _text_shapes(slide) -> list[tuple[Box, object]]:
     """Текстовые фигуры слайда с их абсолютными рамками.
 
@@ -151,7 +160,10 @@ def _text_shapes(slide) -> list[tuple[Box, object]]:
     """
     found: list[tuple[Box, object]] = []
     tree = slide.shapes._spTree
-    by_element = {shape._element: shape for shape in slide.shapes}
+    # Фигуры внутри групп — тоже. Раньше брался только верхний уровень, и
+    # текст в группе не заполнялся и не очищался: подсказка дизайнера
+    # («Опишите преимущества…» на `vk_education`) доезжала до колоды.
+    by_element = {shape._element: shape for shape in _all_shapes(slide.shapes)}
     for element, box, _ in iter_shapes(tree):
         if box is None:
             continue

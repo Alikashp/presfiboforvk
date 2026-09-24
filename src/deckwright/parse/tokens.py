@@ -164,6 +164,36 @@ def backdrop_color(
     return best[1] if best else None
 
 
+def local_backdrop(
+    container: etree._Element,
+    box: Box,
+    theme: dict[str, str],
+    clr_map: dict[str, str],
+) -> Color | None:
+    """Цвет самой тесной залитой фигуры, внутри которой лежит рамка.
+
+    Берётся заливка фигуры (`p:spPr/a:solidFill`), а не цвет текста в ней.
+    Самая тесная — потому что ближе всего к тексту лежит карточка, а не
+    подложка слайда под ней. Картинку и градиент так не распознать: это
+    задача растра, здесь — только сплошные заливки.
+    """
+    best: tuple[int, Color] | None = None
+    for element, shape_box, _ in iter_shapes(container):
+        if shape_box is None or shape_box.area <= 0:
+            continue
+        inside_w = min(shape_box.right, box.right) - max(shape_box.x, box.x)
+        inside_h = min(shape_box.bottom, box.bottom) - max(shape_box.y, box.y)
+        if inside_w <= 0 or inside_h <= 0 or inside_w * inside_h < 0.9 * box.area:
+            continue
+        fill = element.find(f"{{{P_NS}}}spPr/{{{A_NS}}}solidFill")
+        if fill is None:
+            continue
+        color = resolve_color(fill, theme, clr_map)
+        if color is not None and (best is None or shape_box.area < best[0]):
+            best = (shape_box.area, color)
+    return best[1] if best else None
+
+
 def _collect_colors(
     element: etree._Element,
     box: Box | None,

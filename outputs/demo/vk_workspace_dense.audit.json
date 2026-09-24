@@ -12,19 +12,19 @@
       ],
       "bbox": {
         "x": 1510259,
-        "y": 4682209,
+        "y": 4567906,
         "w": 2213844,
         "h": 834283
       },
-      "message": "s1_b0: текст не помещается в рамку: помещается 3 строк, занято 11",
+      "message": "s1_b0: текст не помещается в рамку: помещается 4 строк, занято 9",
       "fix": {
         "kind": "assisted",
         "description": "сократить текст или разнести блоки на два слайда",
         "action": "shorten_or_split",
         "params": {
           "element_id": "s1_b0",
-          "capacity_lines": 3,
-          "used_lines": 11
+          "capacity_lines": 4,
+          "used_lines": 9
         }
       },
       "confidence": 1.0
@@ -64,79 +64,23 @@
       "severity": "warning",
       "slide_index": 3,
       "element_ids": [
-        "s3_title"
-      ],
-      "bbox": {
-        "x": 5916189,
-        "y": 1442224,
-        "w": 5782981,
-        "h": 496940
-      },
-      "message": "s3_title: текст не помещается в рамку: помещается 0 строк, занято 2",
-      "fix": {
-        "kind": "assisted",
-        "description": "сократить текст или разнести блоки на два слайда",
-        "action": "shorten_or_split",
-        "params": {
-          "element_id": "s3_title",
-          "capacity_lines": 0,
-          "used_lines": 2
-        }
-      },
-      "confidence": 1.0
-    },
-    {
-      "check_id": "layout.text_overflow",
-      "kind": "deterministic",
-      "category": "layout",
-      "severity": "warning",
-      "slide_index": 3,
-      "element_ids": [
         "s3_b1"
       ],
       "bbox": {
-        "x": 6830705,
-        "y": 2116408,
-        "w": 4680000,
-        "h": 678239
+        "x": 1510259,
+        "y": 4567906,
+        "w": 2213844,
+        "h": 834283
       },
-      "message": "s3_b1: текст не помещается в рамку: помещается 3 строк, занято 4",
+      "message": "s3_b1: текст не помещается в рамку: помещается 4 строк, занято 11",
       "fix": {
         "kind": "assisted",
         "description": "сократить текст или разнести блоки на два слайда",
         "action": "shorten_or_split",
         "params": {
           "element_id": "s3_b1",
-          "capacity_lines": 3,
-          "used_lines": 4
-        }
-      },
-      "confidence": 1.0
-    },
-    {
-      "check_id": "layout.text_overflow",
-      "kind": "deterministic",
-      "category": "layout",
-      "severity": "warning",
-      "slide_index": 4,
-      "element_ids": [
-        "s4_title"
-      ],
-      "bbox": {
-        "x": 5916189,
-        "y": 1442224,
-        "w": 5782981,
-        "h": 496940
-      },
-      "message": "s4_title: текст не помещается в рамку: помещается 0 строк, занято 2",
-      "fix": {
-        "kind": "assisted",
-        "description": "сократить текст или разнести блоки на два слайда",
-        "action": "shorten_or_split",
-        "params": {
-          "element_id": "s4_title",
-          "capacity_lines": 0,
-          "used_lines": 2
+          "capacity_lines": 4,
+          "used_lines": 11
         }
       },
       "confidence": 1.0
@@ -151,20 +95,20 @@
         "s4_b1"
       ],
       "bbox": {
-        "x": 6830705,
-        "y": 2116408,
-        "w": 4680000,
-        "h": 678239
+        "x": 1510259,
+        "y": 4567906,
+        "w": 2213844,
+        "h": 834283
       },
-      "message": "s4_b1: текст не помещается в рамку: помещается 3 строк, занято 5",
+      "message": "s4_b1: текст не помещается в рамку: помещается 4 строк, занято 11",
       "fix": {
         "kind": "assisted",
         "description": "сократить текст или разнести блоки на два слайда",
         "action": "shorten_or_split",
         "params": {
           "element_id": "s4_b1",
-          "capacity_lines": 3,
-          "used_lines": 5
+          "capacity_lines": 4,
+          "used_lines": 11
         }
       },
       "confidence": 1.0
@@ -176,23 +120,23 @@
       "severity": "warning",
       "slide_index": 5,
       "element_ids": [
-        "s5_title"
+        "s5_b0"
       ],
       "bbox": {
-        "x": 5916189,
-        "y": 1442224,
-        "w": 5782981,
-        "h": 496940
+        "x": 1510259,
+        "y": 4567906,
+        "w": 2213844,
+        "h": 834283
       },
-      "message": "s5_title: текст не помещается в рамку: помещается 0 строк, занято 2",
+      "message": "s5_b0: текст не помещается в рамку: помещается 4 строк, занято 9",
       "fix": {
         "kind": "assisted",
         "description": "сократить текст или разнести блоки на два слайда",
         "action": "shorten_or_split",
         "params": {
-          "element_id": "s5_title",
-          "capacity_lines": 0,
-          "used_lines": 2
+          "element_id": "s5_b0",
+          "capacity_lines": 4,
+          "used_lines": 9
         }
       },
       "confidence": 1.0
@@ -207,20 +151,20 @@
         "s5_b1"
       ],
       "bbox": {
-        "x": 6830705,
-        "y": 2116408,
-        "w": 4680000,
-        "h": 678239
+        "x": 4580031,
+        "y": 4567906,
+        "w": 2213844,
+        "h": 834283
       },
-      "message": "s5_b1: текст не помещается в рамку: помещается 3 строк, занято 4",
+      "message": "s5_b1: текст не помещается в рамку: помещается 4 строк, занято 9",
       "fix": {
         "kind": "assisted",
         "description": "сократить текст или разнести блоки на два слайда",
         "action": "shorten_or_split",
         "params": {
           "element_id": "s5_b1",
-          "capacity_lines": 3,
-          "used_lines": 4
+          "capacity_lines": 4,
+          "used_lines": 9
         }
       },
       "confidence": 1.0
@@ -235,12 +179,12 @@
         "s6_title"
       ],
       "bbox": {
-        "x": 5916189,
-        "y": 1442224,
-        "w": 5782981,
-        "h": 496940
+        "x": 429253,
+        "y": 2327310,
+        "w": 4499229,
+        "h": 1167572
       },
-      "message": "s6_title: текст не помещается в рамку: помещается 0 строк, занято 2",
+      "message": "s6_title: текст не помещается в рамку: помещается 0 строк, занято 6",
       "fix": {
         "kind": "assisted",
         "description": "сократить текст или разнести блоки на два слайда",
@@ -248,7 +192,7 @@
         "params": {
           "element_id": "s6_title",
           "capacity_lines": 0,
-          "used_lines": 2
+          "used_lines": 6
         }
       },
       "confidence": 1.0
@@ -260,23 +204,23 @@
       "severity": "warning",
       "slide_index": 7,
       "element_ids": [
-        "s7_title"
+        "s7_b0"
       ],
       "bbox": {
-        "x": 5916189,
-        "y": 1442224,
-        "w": 5782981,
-        "h": 496940
+        "x": 1510259,
+        "y": 4567906,
+        "w": 2213844,
+        "h": 834283
       },
-      "message": "s7_title: текст не помещается в рамку: помещается 0 строк, занято 2",
+      "message": "s7_b0: текст не помещается в рамку: помещается 4 строк, занято 6",
       "fix": {
         "kind": "assisted",
         "description": "сократить текст или разнести блоки на два слайда",
         "action": "shorten_or_split",
         "params": {
-          "element_id": "s7_title",
-          "capacity_lines": 0,
-          "used_lines": 2
+          "element_id": "s7_b0",
+          "capacity_lines": 4,
+          "used_lines": 6
         }
       },
       "confidence": 1.0
@@ -291,20 +235,20 @@
         "s7_b1"
       ],
       "bbox": {
-        "x": 6830705,
-        "y": 2116408,
-        "w": 4680000,
-        "h": 678239
+        "x": 4580031,
+        "y": 4567906,
+        "w": 2213844,
+        "h": 834283
       },
-      "message": "s7_b1: текст не помещается в рамку: помещается 3 строк, занято 5",
+      "message": "s7_b1: текст не помещается в рамку: помещается 4 строк, занято 9",
       "fix": {
         "kind": "assisted",
         "description": "сократить текст или разнести блоки на два слайда",
         "action": "shorten_or_split",
         "params": {
           "element_id": "s7_b1",
-          "capacity_lines": 3,
-          "used_lines": 5
+          "capacity_lines": 4,
+          "used_lines": 9
         }
       },
       "confidence": 1.0
@@ -316,23 +260,51 @@
       "severity": "warning",
       "slide_index": 9,
       "element_ids": [
-        "s9_b0_p0"
+        "s9_b0"
       ],
       "bbox": {
         "x": 1510259,
-        "y": 4682209,
+        "y": 4567906,
         "w": 2213844,
         "h": 834283
       },
-      "message": "s9_b0_p0: текст не помещается в рамку: помещается 3 строк, занято 10",
+      "message": "s9_b0: текст не помещается в рамку: помещается 4 строк, занято 8",
       "fix": {
         "kind": "assisted",
         "description": "сократить текст или разнести блоки на два слайда",
         "action": "shorten_or_split",
         "params": {
-          "element_id": "s9_b0_p0",
-          "capacity_lines": 3,
-          "used_lines": 10
+          "element_id": "s9_b0",
+          "capacity_lines": 4,
+          "used_lines": 8
+        }
+      },
+      "confidence": 1.0
+    },
+    {
+      "check_id": "layout.text_overflow",
+      "kind": "deterministic",
+      "category": "layout",
+      "severity": "warning",
+      "slide_index": 9,
+      "element_ids": [
+        "s9_b1"
+      ],
+      "bbox": {
+        "x": 4580031,
+        "y": 4567906,
+        "w": 2213844,
+        "h": 834283
+      },
+      "message": "s9_b1: текст не помещается в рамку: помещается 4 строк, занято 8",
+      "fix": {
+        "kind": "assisted",
+        "description": "сократить текст или разнести блоки на два слайда",
+        "action": "shorten_or_split",
+        "params": {
+          "element_id": "s9_b1",
+          "capacity_lines": 4,
+          "used_lines": 8
         }
       },
       "confidence": 1.0
@@ -344,69 +316,24 @@
       "severity": "warning",
       "slide_index": 10,
       "element_ids": [
-        "s10_b0_p1"
-      ],
-      "bbox": {
-        "x": 1510259,
-        "y": 4682209,
-        "w": 2213844,
-        "h": 834283
-      },
-      "message": "s10_b0_p1: текст не помещается в рамку: помещается 3 строк, занято 11",
-      "fix": {
-        "kind": "assisted",
-        "description": "сократить текст или разнести блоки на два слайда",
-        "action": "shorten_or_split",
-        "params": {
-          "element_id": "s10_b0_p1",
-          "capacity_lines": 3,
-          "used_lines": 11
-        }
-      },
-      "confidence": 1.0
-    },
-    {
-      "check_id": "layout.text_overflow",
-      "kind": "deterministic",
-      "category": "layout",
-      "severity": "warning",
-      "slide_index": 11,
-      "element_ids": [
         "s10_b0"
       ],
       "bbox": {
         "x": 1510259,
-        "y": 4682209,
+        "y": 4567906,
         "w": 2213844,
         "h": 834283
       },
-      "message": "s10_b0: текст не помещается в рамку: помещается 3 строк, занято 8",
+      "message": "s10_b0: текст не помещается в рамку: помещается 4 строк, занято 6",
       "fix": {
         "kind": "assisted",
         "description": "сократить текст или разнести блоки на два слайда",
         "action": "shorten_or_split",
         "params": {
           "element_id": "s10_b0",
-          "capacity_lines": 3,
-          "used_lines": 8
+          "capacity_lines": 4,
+          "used_lines": 6
         }
-      },
-      "confidence": 1.0
-    },
-    {
-      "check_id": "density.slide_too_empty",
-      "kind": "deterministic",
-      "category": "density",
-      "severity": "info",
-      "slide_index": 1,
-      "element_ids": [],
-      "bbox": null,
-      "message": "слайд заполнен на 21% при пороге 25%",
-      "fix": {
-        "kind": "none",
-        "description": "",
-        "action": "",
-        "params": {}
       },
       "confidence": 1.0
     },
@@ -416,57 +343,6 @@
       "category": "density",
       "severity": "info",
       "slide_index": 2,
-      "element_ids": [],
-      "bbox": null,
-      "message": "слайд заполнен на 21% при пороге 25%",
-      "fix": {
-        "kind": "none",
-        "description": "",
-        "action": "",
-        "params": {}
-      },
-      "confidence": 1.0
-    },
-    {
-      "check_id": "density.slide_too_empty",
-      "kind": "deterministic",
-      "category": "density",
-      "severity": "info",
-      "slide_index": 9,
-      "element_ids": [],
-      "bbox": null,
-      "message": "слайд заполнен на 21% при пороге 25%",
-      "fix": {
-        "kind": "none",
-        "description": "",
-        "action": "",
-        "params": {}
-      },
-      "confidence": 1.0
-    },
-    {
-      "check_id": "density.slide_too_empty",
-      "kind": "deterministic",
-      "category": "density",
-      "severity": "info",
-      "slide_index": 10,
-      "element_ids": [],
-      "bbox": null,
-      "message": "слайд заполнен на 21% при пороге 25%",
-      "fix": {
-        "kind": "none",
-        "description": "",
-        "action": "",
-        "params": {}
-      },
-      "confidence": 1.0
-    },
-    {
-      "check_id": "density.slide_too_empty",
-      "kind": "deterministic",
-      "category": "density",
-      "severity": "info",
-      "slide_index": 11,
       "element_ids": [],
       "bbox": null,
       "message": "слайд заполнен на 21% при пороге 25%",

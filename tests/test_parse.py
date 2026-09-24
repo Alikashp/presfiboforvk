@@ -177,48 +177,49 @@ def test_declared_fonts_rank_below_used_ones():
 
 
 def test_layout_inherits_its_size_from_the_master(template_paths):
-    """Кегль, не объявленный в layout'е, берётся из `p:txStyles` мастера.
+    """Кегль, не объявленный в layout'е, наследуется по цепочке OOXML.
 
-    Так его разрешает PowerPoint. Пока вместо этого подставлялась середина
-    типографической шкалы, заголовки чужого шаблона считались набранными
-    двадцатым кеглем вместо сорок четвёртого — и бюджет длины заголовка
-    вырастал с тридцати символов до двухсот семидесяти семи, то есть просил
-    у модели абзац в рамку на одну строку.
+    Плейсхолдер макета → **плейсхолдер мастера того же типа** → `p:txStyles`
+    мастера. Раньше среднее звено пропускалось: у `vk_education` заголовок
+    получал 14 pt из `titleStyle`, хотя плейсхолдер заголовка мастера набран
+    36 pt — так он и рисуется. Бюджет длины заголовка завышался вдвое.
     """
     import re
     import zipfile
 
+    checked = 0
     for path in template_paths:
         spec = parse_template(path)
         with zipfile.ZipFile(path) as archive:
             master = archive.read("ppt/slideMasters/slideMaster1.xml").decode("utf-8")
-        block = re.search(r"<p:titleStyle>.*?</p:titleStyle>", master, re.S)
-        if block is None:
-            continue
-        found = re.search(r'sz="(\d+)"', block.group(0))
-        if found is None:
-            continue
-        declared = int(found.group(1)) / 100
-
-        # Наследовать нечего, если каждый layout объявил кегль сам. У
-        # `vk_tech` так и есть: 37 заголовков из 37 со своим `sz`, и требовать
-        # там кегль мастера значит требовать того, чего в шаблоне нет.
-        # Проверяем механизм там, где он работает, а не факт совпадения.
-        with zipfile.ZipFile(path) as archive:
-            silent = [
-                name
+            layouts = [
+                archive.read(name).decode("utf-8")
                 for name in sorted(archive.namelist())
                 if re.match(r"ppt/slideLayouts/slideLayout\d+\.xml$", name)
-                and any(
-                    ('type="title"' in sp or 'type="ctrTitle"' in sp)
-                    and not re.search(r'sz="\d+"', sp)
-                    for sp in re.findall(
-                        r"<p:sp>.*?</p:sp>", archive.read(name).decode("utf-8"), re.S
-                    )
-                )
             ]
+
+        def title_shape(xml: str) -> str | None:
+            for shape in re.findall(r"<p:sp>.*?</p:sp>", xml, re.S):
+                if 'type="title"' in shape or 'type="ctrTitle"' in shape:
+                    return shape
+            return None
+
+        silent = [
+            xml
+            for xml in layouts
+            if (shape := title_shape(xml)) is not None and not re.search(r'sz="\d+"', shape)
+        ]
         if not silent:
+            continue  # каждый layout объявил кегль сам — наследовать нечего
+
+        master_title = title_shape(master) or ""
+        own = re.search(r'<a:lvl1pPr[^>]*>.*?<a:defRPr[^>]*sz="(\d+)"', master_title, re.S)
+        styles = re.search(r"<p:titleStyle>.*?</p:titleStyle>", master, re.S)
+        fallback = re.search(r'sz="(\d+)"', styles.group(0)) if styles else None
+        source = own or fallback
+        if source is None:
             continue
+        expected = int(source.group(1)) / 100
 
         inherited = [
             slot.style.size_pt
@@ -226,8 +227,120 @@ def test_layout_inherits_its_size_from_the_master(template_paths):
             for slot in layout.slots
             if slot.role is SlotRole.TITLE and slot.style is not None
         ]
-        assert declared in inherited, (
+        assert expected in inherited, (
             f"{path.name}: {len(silent)} layout'ов не объявляют кегль заголовка, "
-            f"и он обязан достаться им из мастера ({declared} pt); "
-            f"получено: {sorted(set(inherited))}"
+            f"ожидался {expected} pt из мастера; получено: {sorted(set(inherited))}"
         )
+        checked += 1
+    if not checked:
+        pytest.skip("нет шаблона, где кегль заголовка наследуется")
+
+
+# ── Роли, объявленные автором шаблона ────────────────────────────────────────
+
+
+def test_declared_title_placeholder_is_the_title(specs):
+    """Плейсхолдер `title` на слайде-примере — заголовок композиции.
+
+    Раньше заголовок угадывался рангом кегля, и заголовок, набранный кеглем
+    макета, проигрывал крупной цифре: у `vk_workspace` слот заголовка был у
+    4 композиций из 28. Композиция без заголовка почти не выбирается, и три
+    варианта выбирали из трёх-четырёх композиций.
+    """
+    from deckwright.layout.matcher import _title_slot, _usable_slots
+
+    for spec in specs:
+        usable = [
+            p
+            for p in spec.patterns
+            if _usable_slots(p, spec.slide_width_emu, spec.slide_height_emu)
+        ]
+        if len(usable) < 5:
+            continue
+        titled = [p for p in usable if _title_slot(p) is not None]
+        assert len(titled) >= 0.8 * len(usable), (
+            f"{spec.source_name}: заголовок у {len(titled)} композиций из {len(usable)}"
+        )
+        for pattern in usable:
+            titles = [s for s in pattern.slots if s.role is SlotRole.TITLE]
+            assert len(titles) <= 1, f"{spec.source_name}/{pattern.id}: два заголовка"
+
+
+def test_title_without_its_own_frame_takes_the_layouts():
+    """Заголовок без своей рамки — с рамкой из макета, а не пропущен.
+
+    На holdout-шаблоне заголовок слайда наследует рамку, в разбор не попадал,
+    и заголовком становилась цифра рядом — «987 654 321».
+    """
+    from pathlib import Path
+
+    from deckwright.layout.matcher import _title_slot
+
+    path = Path(__file__).resolve().parents[1] / "data" / "holdout" / "zelenie_investicii.pptx"
+    if not path.exists():
+        pytest.skip("нет holdout-шаблона")
+    spec = parse_template(path)
+    for pattern in spec.patterns:
+        title = _title_slot(pattern)
+        if title is None:
+            continue
+        assert "987" not in title.placeholder_text, f"{pattern.id}: цифра стала заголовком"
+        numbers = [s for s in pattern.slots if "987 654 321" in s.placeholder_text]
+        for slot in numbers:
+            assert slot.role is SlotRole.KPI_VALUE, f"{pattern.id}: {slot.role}"
+
+
+def test_footer_is_not_a_place_for_content(specs):
+    """Колонтитул, объявленный автором, не становится телом текста."""
+    from deckwright.layout.matcher import _CONTENT_ROLES
+
+    for spec in specs:
+        for pattern in spec.patterns:
+            for slot in pattern.slots:
+                if slot.role in _CONTENT_ROLES:
+                    assert "Шаблоны презентаций с сайта" not in slot.placeholder_text, (
+                        f"{spec.source_name}/{pattern.id}: колонтитул стал {slot.role}"
+                    )
+
+
+def test_parser_change_invalidates_the_cache(tmp_path, template_paths, monkeypatch):
+    """Кэш разбора привязан к коду парсера: правка кода — новый разбор."""
+    from deckwright.parse import opener
+
+    path = template_paths[0]
+    parse_template(path, cache_dir=tmp_path)
+    before = sorted(p.name for p in tmp_path.iterdir())
+    monkeypatch.setattr(opener, "_parser_fingerprint", lambda: "другой-код")
+    parse_template(path, cache_dir=tmp_path)
+    after = sorted(p.name for p in tmp_path.iterdir())
+    assert len(after) == len(before) + 1, "исправленный парсер взял старый разбор из кэша"
+
+
+def test_text_sits_on_the_backdrop_it_is_drawn_on():
+    """Локальный фон — самая тесная залитая фигура под рамкой."""
+    from lxml import etree
+
+    from deckwright.parse.tokens import local_backdrop
+    from deckwright.schemas import Box
+
+    p = "http://schemas.openxmlformats.org/presentationml/2006/main"
+    a = "http://schemas.openxmlformats.org/drawingml/2006/main"
+
+    def rect(x, y, w, h, rgb):
+        return (
+            f'<p:sp xmlns:p="{p}" xmlns:a="{a}"><p:nvSpPr><p:cNvPr id="1" name="r"/>'
+            f"<p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm>"
+            f'<a:off x="{x}" y="{y}"/><a:ext cx="{w}" cy="{h}"/></a:xfrm>'
+            f'<a:solidFill><a:srgbClr val="{rgb}"/></a:solidFill></p:spPr></p:sp>'
+        )
+
+    tree = etree.fromstring(
+        f'<p:spTree xmlns:p="{p}" xmlns:a="{a}">'
+        + rect(0, 0, 1000, 1000, "FFFFFF")
+        + rect(500, 0, 500, 1000, "000000")
+        + "</p:spTree>"
+    )
+    inside = local_backdrop(tree, Box(x=600, y=100, w=300, h=300), {}, {})
+    outside = local_backdrop(tree, Box(x=100, y=100, w=300, h=300), {}, {})
+    assert inside is not None and inside.rgb.upper() == "000000"
+    assert outside is not None and outside.rgb.upper() == "FFFFFF"

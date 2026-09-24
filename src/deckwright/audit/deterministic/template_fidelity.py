@@ -139,14 +139,15 @@ def contrast(slide: SlideIR, min_ratio: float = MIN_CONTRAST) -> list[Issue]:
     Порог приходит из конфига (`audit.contrast_min_ratio`); умолчание — 4.5:1
     по WCAG AA для основного текста.
     """
-    if slide.background is None:
-        return []
     found: list[Issue] = []
     for element in slide.all_elements():
-        if element.text is None:
+        # Мерится по фону, на котором текст лежит: подложка элемента, если
+        # она есть, иначе фон слайда.
+        backdrop = element.backdrop or slide.background
+        if element.text is None or backdrop is None:
             continue
         for paragraph in element.text.paragraphs:
-            ratio = paragraph.style.color.contrast_ratio(slide.background)
+            ratio = paragraph.style.color.contrast_ratio(backdrop)
             if ratio >= min_ratio:
                 continue
             found.append(

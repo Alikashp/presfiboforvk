@@ -148,6 +148,43 @@ def _roomy_for_data(box: Box, spec: TemplateSpec) -> bool:
     )
 
 
+def _seats_all(
+    pattern: Pattern,
+    spec: TemplateSpec,
+    plan_slide: SlidePlan,
+    strategy: Strategy,
+    metrics: FontMetrics | None = None,
+    ladders: dict[SlotRole, list[float]] | None = None,
+) -> bool:
+    """Получит ли каждый блок свой слот — с учётом доли мест варианта.
+
+    Слабее `_blocks_fit`: влезет ли текст целиком, не проверяет. Нужен
+    запасному пути, когда не влезает нигде: блок без слота уходит в запасную
+    полосу, а та на `vk_education` ложилась поверх соседнего блока. Но слот,
+    куда не помещается ни одной строки, — не место: так показатель садился в
+    рамку высотой меньше строки и пропадал со слайда.
+    """
+    free = _usable_slots(pattern, spec.slide_width_emu, spec.slide_height_emu)
+    allowed = max(1, round(len(free) * strategy.slot_fill_target)) if free else 0
+    free = free[:allowed]
+    title = _title_slot(pattern)
+    taken = [title.box] if title is not None else []
+    for block in plan_slide.blocks:
+        if not _block_lines(block):
+            continue
+        role = strategy.role_for(block)
+        slot = _assign(free, role, taken)
+        if slot is None:
+            return False
+        ladder = (ladders or {}).get(slot.role) or []
+        if metrics is not None and ladder and role not in _DATA_ROLES:
+            smallest = fit_paragraphs(_block_lines(block), metrics, slot.box, ladder, min(ladder))
+            if not smallest.capacity_lines:
+                return False
+        taken.append(slot.box)
+    return True
+
+
 def _blocks_fit(
     pattern: Pattern,
     spec: TemplateSpec,
@@ -317,6 +354,15 @@ def pick_pattern(
     roomy = fitting(relaxed)
     if roomy:
         return best_of(roomy)
+    # Не влезает нигде. Тогда хотя бы так, чтобы у каждого блока был свой
+    # слот: переполнение останется находкой, но блоки не лягут друг на друга.
+    seated = [
+        pattern
+        for pattern in (matches or []) + relaxed
+        if _seats_all(pattern, spec, plan_slide, strategy, metrics, ladders)
+    ]
+    if seated:
+        return best_of(seated)
     if matches:
         return best_of(matches)
     if not relaxed:
@@ -465,6 +511,13 @@ MIN_CONTRAST = 4.5
 TABLE_ROW_HEIGHT = 1.8
 TABLE_MIN_CHARS = 6
 EMU_PER_POINT = 12_700
+
+
+def _under(slot, background: Color | None) -> Color | None:
+    """Фон, на котором окажется текст слота: его подложка, иначе фон слайда."""
+    if slot is not None and getattr(slot, "backdrop", None) is not None:
+        return slot.backdrop
+    return background
 
 
 def _text_color(
@@ -833,6 +886,7 @@ def build_slide_ir(
             role=SlotRole.TITLE,
             box=title_box,
             provenance=provenance,
+            backdrop=_under(title_slot, None),
             text=TextContent(
                 scale_steps_down=title_steps,
                 truncated=title_overflowed,
@@ -845,7 +899,13 @@ def build_slide_ir(
                             font_family=font_family,
                             size_pt=title_size,
                             bold=True,
-                            color=_text_color(container, SlotRole.TITLE, is_dark, background, spec),
+                            color=_text_color(
+                                container,
+                                SlotRole.TITLE,
+                                is_dark,
+                                _under(title_slot, background),
+                                spec,
+                            ),
                         ),
                     )
                 ]
@@ -919,7 +979,7 @@ def build_slide_ir(
         style = TextStyle(
             font_family=font_family,
             size_pt=size,
-            color=_text_color(container, role, is_dark, background, spec),
+            color=_text_color(container, role, is_dark, _under(slot, background), spec),
         )
         taken.append(box)
 
@@ -949,6 +1009,7 @@ def build_slide_ir(
                 role=slot.role if slot is not None else role,
                 box=box,
                 provenance=provenance,
+                backdrop=_under(slot, None),
                 text=TextContent(
                     paragraphs=[
                         Paragraph(text=line, style=style, bullet=len(lines) > 1)

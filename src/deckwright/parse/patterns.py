@@ -171,6 +171,59 @@ def _role_from_geometry(
     return SlotRole.BODY
 
 
+# Роли, которые автор шаблона объявил типом плейсхолдера. Объявление сильнее
+# любой догадки по геометрии: на трёх шаблонах датасета заголовок, набранный
+# кеглем макета (без `sz` в самом тексте), проигрывал ранг крупной цифре или
+# подписи и становился подзаголовком или телом — у 97 композиций из 101, где
+# заголовка «не было», на слайде стоял плейсхолдер `title` с рамкой.
+#
+# Колонтитул, дата и номер слайда — туда же: иначе текст колонтитула
+# («Шаблоны презентаций с сайта…» на holdout) разбирался как тело и
+# становился местом под содержание.
+_DECLARED_ROLE = {
+    "title": SlotRole.TITLE,
+    "ctrTitle": SlotRole.TITLE,
+    "subTitle": SlotRole.SUBTITLE,
+    "ftr": SlotRole.FOOTER,
+    "dt": SlotRole.FOOTER,
+    "sldNum": SlotRole.SLIDE_NUMBER,
+}
+
+
+def _declared_role(element: etree._Element) -> SlotRole | None:
+    """Роль из типа плейсхолдера фигуры, если тип однозначный."""
+    for node in element.iter():
+        if etree.QName(node).localname == "ph":
+            return _DECLARED_ROLE.get(node.get("type", ""))
+    return None
+
+
+def _inherited_titles(
+    container: etree._Element, inherited: dict[SlotRole, Slot], collected: list[_Shape]
+) -> list[_Shape]:
+    """Заголовочные плейсхолдеры без своей рамки — с рамкой из макета."""
+    have = {id(shape.element) for shape in collected}
+    found: list[_Shape] = []
+    for element, box, _ in iter_shapes(container):
+        if box is not None or id(element) in have:
+            continue
+        role = _declared_role(element)
+        slot = inherited.get(role) if role is not None else None
+        text = _text_of(element)
+        if slot is None or not text:
+            continue
+        found.append(
+            _Shape(
+                element=element,
+                box=slot.box,
+                tag=etree.QName(element).localname,
+                text=text,
+                size_pt=_max_size(element),
+            )
+        )
+    return found
+
+
 def _collect(container: etree._Element, slide_w: int, slide_h: int) -> list[_Shape]:
     shapes: list[_Shape] = []
     min_area = slide_w * slide_h * MIN_SLOT_AREA_SHARE
@@ -395,31 +448,62 @@ def mine_slide(
     layout_id: str | None,
     default_style: TextStyle,
     is_dark: bool = False,
+    inherited_slots: dict[SlotRole, Slot] | None = None,
 ) -> Pattern | None:
-    """Разбирает слайд-пример в композиционный паттерн."""
+    """Разбирает слайд-пример в композиционный паттерн.
+
+    `inherited_slots` — слоты макета, на котором стоит слайд. Плейсхолдер
+    слайда наследует из макета то, чего не задал сам: кегль, а часто и
+    рамку. Заголовок без своей рамки иначе не попадал в разбор вовсе, и
+    заголовком композиции становилась крупная цифра рядом («987 654 321» на
+    holdout-шаблоне).
+    """
+    inherited_slots = inherited_slots or {}
     shapes = _collect(container, slide_w, slide_h)
+    shapes.extend(_inherited_titles(container, inherited_slots, shapes))
     if not shapes:
         return None
 
     repeaters, consumed = _find_repeaters(shapes, slide_index, slide_w, slide_h)
 
+    own = [
+        shape
+        for shape in shapes
+        if id(shape.element) not in consumed and shape.tag != "grpSp"
+    ]
+    declared = {id(shape.element): _declared_role(shape.element) for shape in own}
+    has_declared_title = SlotRole.TITLE in declared.values()
+
     slots: list[Slot] = []
     for position, shape in enumerate(shapes):
         if id(shape.element) in consumed or shape.tag == "grpSp":
             continue
-        role = _role_from_geometry(shape, shapes, slide_h, slide_w)
+        role = declared.get(id(shape.element))
+        if role is not None and not shape.text:
+            role = None  # пустой плейсхолдер — не место для содержания
+        if role is None:
+            role = _role_from_geometry(shape, shapes, slide_h, slide_w)
+            # Заголовок на слайде один. Если автор объявил его сам, крупный
+            # текст, «выигравший» ранг кегля, — это не второй заголовок.
+            # Короткий крупный текст — показатель («987 654 321»), как и в
+            # правиле для чисел внутри `_role_from_geometry`.
+            if role is SlotRole.TITLE and has_declared_title:
+                role = SlotRole.KPI_VALUE if len(shape.text) <= 12 else SlotRole.SUBTITLE
         if role is SlotRole.DECOR:
             continue
+        inherited = inherited_slots.get(role)
+        if shape.size_pt > 0:
+            style = default_style.model_copy(update={"size_pt": shape.size_pt})
+        elif inherited is not None and inherited.style is not None:
+            style = inherited.style
+        else:
+            style = default_style
         slots.append(
             Slot(
                 id=f"s{slide_index}_{position}",
                 role=role,
                 box=shape.box,
-                style=(
-                    default_style.model_copy(update={"size_pt": shape.size_pt})
-                    if shape.size_pt > 0
-                    else default_style
-                ),
+                style=style,
                 placeholder_text=shape.text[:80],
                 provenance=Provenance(kind=SourceKind.SLIDE, ref=f"slide{slide_index}"),
             )

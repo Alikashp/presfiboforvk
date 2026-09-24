@@ -1,7 +1,7 @@
 {
-  "run_id": "run-20260924-134250",
-  "started_at": "2026-09-24T13:42:50.181586Z",
-  "finished_at": "2026-09-24T13:42:58.568452Z",
+  "run_id": "run-20260924-205944",
+  "started_at": "2026-09-24T20:59:44.097279Z",
+  "finished_at": "2026-09-24T20:59:54.111085Z",
   "template_sha256": "cbbe3aa6a21d23cebc4d1383b93dd07a9cea460d683de1903567b616c839485d",
   "template_name": "vk_tech.pptx",
   "seed": 20260101,
@@ -11,8 +11,8 @@
   "prompts": [
     {
       "name": "plan_deck",
-      "version": "2",
-      "sha256": "0789188286fa266429fb64cbc9372dcb9670d282f81d3cea5c4bef71882cdc16"
+      "version": "3",
+      "sha256": "ed9133fc2d95d12c06f53d3abd93386ffcccbc1d8e9317a6717092938f4225fd"
     }
   ],
   "models": [
@@ -25,13 +25,15 @@
           "temperature": 0.4,
           "max_tokens": 6000,
           "enable_thinking": false,
-          "reasoning_effort": null
+          "reasoning_effort": null,
+          "hedge_after_seconds": 60.0
         },
         "shorten_text": {
           "temperature": 0.2,
           "max_tokens": 1000,
           "enable_thinking": false,
-          "reasoning_effort": null
+          "reasoning_effort": null,
+          "hedge_after_seconds": null
         }
       },
       "dropped_params": [],
@@ -41,6 +43,8 @@
       "retries": 0,
       "rate_limit_hits": 0,
       "slowest_call_seconds": 0.0,
+      "hedges": 0,
+      "hedge_wins": 0,
       "cost_usd": 0.0,
       "thinking_blocks": 0,
       "mocked": true
@@ -49,7 +53,7 @@
   "timings": [
     {
       "stage": "parse",
-      "seconds": 0.037
+      "seconds": 0.128
     },
     {
       "stage": "plan",
@@ -57,55 +61,55 @@
     },
     {
       "stage": "layout",
-      "seconds": 0.54
+      "seconds": 1.449
     },
     {
       "stage": "render_pptx",
-      "seconds": 0.992
+      "seconds": 0.972
     },
     {
       "stage": "verify_package",
-      "seconds": 0.134
+      "seconds": 0.126
     },
     {
       "stage": "render_pdf",
-      "seconds": 1.901
+      "seconds": 2.23
     },
     {
       "stage": "render_png",
-      "seconds": 0.948
+      "seconds": 0.847
     },
     {
       "stage": "render_html",
-      "seconds": 0.116
+      "seconds": 0.127
     },
     {
       "stage": "audit",
-      "seconds": 0.253
+      "seconds": 0.279
     },
     {
       "stage": "render_pptx",
-      "seconds": 1.016
+      "seconds": 0.981
     },
     {
       "stage": "verify_package",
-      "seconds": 0.121
+      "seconds": 0.142
     },
     {
       "stage": "render_pdf",
-      "seconds": 1.775
+      "seconds": 2.234
     },
     {
       "stage": "render_png",
-      "seconds": 0.16
+      "seconds": 0.095
     },
     {
       "stage": "render_html",
-      "seconds": 0.116
+      "seconds": 0.127
     },
     {
       "stage": "audit",
-      "seconds": 0.276
+      "seconds": 0.274
     }
   ],
   "fix_mode": "auto",
@@ -113,18 +117,16 @@
     {
       "number": 1,
       "applied": [
-        "2:layout.margin_violation:s2_title",
-        "7:layout.margin_violation:s6_title"
+        "7:layout.margin_violation:s6_b1"
       ],
       "skipped": {},
       "rewritten_slides": [],
       "rechecked_slides": [
-        2,
         7
       ],
-      "issues_before": 2,
+      "issues_before": 1,
       "issues_after": 0,
-      "seconds": 3.465
+      "seconds": 3.854
     }
   ],
   "unresolved": [],
@@ -147,7 +149,7 @@
   ],
   "warnings": [
     "шрифты не встроены в шаблон и будут подставлены системой, метрики могут разойтись: Calibri, Consolas, Arial",
-    "бюджет длины (шрифт шаблона Play): заголовок 34 симв, пункт 34 симв, до 6 пунктов"
+    "бюджет длины (шрифт шаблона Play): заголовок 34 симв, пункт 35 симв, до 6 пунктов"
   ],
   "artifacts": {
     "pptx": "outputs/dataset/vk_tech/airy/vk_tech_airy.pptx",

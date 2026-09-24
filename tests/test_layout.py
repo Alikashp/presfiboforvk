@@ -304,13 +304,14 @@ def test_text_is_readable_on_the_background_it_lands_on(specs, plan):
         for variant in VARIANTS:
             deck, _ = build_deck_ir(spec, plan, cfg.variant(variant))
             for slide in deck.slides:
-                if slide.background is None:
-                    continue
                 for element in slide.all_elements():
-                    if element.text is None:
+                    # Фон, на котором текст лежит: подложка донора, если она
+                    # есть (карточка, тёмная панель), иначе фон слайда.
+                    backdrop = element.backdrop or slide.background
+                    if element.text is None or backdrop is None:
                         continue
                     for paragraph in element.text.paragraphs:
-                        ratio = paragraph.style.color.contrast_ratio(slide.background)
+                        ratio = paragraph.style.color.contrast_ratio(backdrop)
                         assert ratio >= MIN_CONTRAST, (
                             f"{name}/{variant}: слайд {slide.index}, {element.id} — "
                             f"контраст {ratio:.2f} при пороге {MIN_CONTRAST}"
@@ -497,7 +498,10 @@ def test_lists_are_read_at_the_body_size_of_the_template(specs):
 
 
 def test_declared_capacity_really_fits_in_every_variant(specs):
-    """Что обещано планировщику, то вёрстка обязана уложить во всех трёх вариантах."""
+    """Каждая точка кривой ёмкости обязана укладываться во всех трёх вариантах.
+
+    И кривая монотонна: больше пунктов — пункт не длиннее.
+    """
     from deckwright.layout.capacity import _probe, _text, achievable
     from deckwright.layout.matcher import _blocks_fit, _title_fits, _usable_slots
 
@@ -509,22 +513,23 @@ def test_declared_capacity_really_fits_in_every_variant(specs):
             continue
         ladders = {role: ladder_for_role(spec, role) for role in SlotRole}
         capacity = achievable(spec, strategies, item_chars=34, title_chars=34, max_items=6)
-        for kind, cap in capacity.items():
-            assert cap.items <= 6, f"{name}/{kind}: больше порога ТЗ"
-            if not cap.items:
-                continue
-            slide = _probe(kind, cap.items, cap.chars, _text(24))
-            for strategy in strategies:
-                assert any(
-                    _usable_slots(p, spec.slide_width_emu, spec.slide_height_emu)
-                    and _title_fits(p, slide, strategy, metrics, ladders[SlotRole.TITLE])
-                    and _blocks_fit(p, spec, slide, strategy, metrics, ladders)
-                    for p in spec.patterns
-                ), f"{name}/{strategy.name}: {kind} {cap.items}×{cap.chars} не влезает"
+        for kind, curve in capacity.items():
+            assert all(point.items <= 6 for point in curve), f"{name}/{kind}: больше порога ТЗ"
+            lengths = [point.chars for point in curve]
+            assert lengths == sorted(lengths, reverse=True), f"{name}/{kind}: {curve}"
+            for point in curve:
+                slide = _probe(kind, point.items, point.chars, _text(24))
+                for strategy in strategies:
+                    assert any(
+                        _usable_slots(p, spec.slide_width_emu, spec.slide_height_emu)
+                        and _title_fits(p, slide, strategy, metrics, ladders[SlotRole.TITLE])
+                        and _blocks_fit(p, spec, slide, strategy, metrics, ladders)
+                        for p in spec.patterns
+                    ), f"{name}/{strategy.name}: {kind} {point.items}×{point.chars} не влезает"
 
 
 def test_planner_is_told_the_capacity_not_the_generic_threshold():
-    """В промпт уходит «не больше 3 пунктов», а не общий порог «до 6»."""
+    """В промпт уходит кривая ёмкости, а не общий порог «до 6»."""
     from deckwright.plan.budget import LengthBudget
 
     budget = LengthBudget(
@@ -534,9 +539,18 @@ def test_planner_is_told_the_capacity_not_the_generic_threshold():
         max_bullets=6,
         max_words_per_bullet=15,
         measured_with="тест",
-        block_limits=(("bullets", 3, 34), ("paragraph", 1, 153)),
+        block_limits=(
+            ("bullets", 2, 110),
+            ("bullets", 3, 74),
+            ("bullets", 5, 50),
+            ("bullets", 6, 26),
+            ("paragraph", 1, 132),
+        ),
     )
     lines = budget.as_prompt_lines()
-    assert "не больше 3 пунктов" in lines
-    assert "абзац (paragraph): не длиннее 153" in lines
+    assert (
+        "1–2 пункта до 110 символов; 3 пункта до 74 символов; "
+        "4–5 пунктов до 50 символов; 6 пунктов до 26 символов"
+    ) in lines
+    assert "абзац (paragraph): не длиннее 132" in lines
     assert "не больше 6" not in lines

@@ -581,18 +581,23 @@ def test_rewrite_that_keeps_too_many_lines_is_refused(holdout_deck):
     потратить вызов и оставить находку — лучше отказать с причиной.
     """
     result, overflow = holdout_deck
-    target = overflow[0]
+    # На строку больше, чем вмещает рамка. Берётся самая тесная рамка: число
+    # строк ответа ограничено ещё и порогом ТЗ (шесть пунктов), и сценарий
+    # «строк больше ёмкости» строится только там, где ёмкость ниже порога.
+    target = min(overflow, key=lambda issue: int(issue.fix.params["capacity_lines"]))
+    lines = int(target.fix.params["capacity_lines"]) + 1
+    limit = load_config(CONFIG).audit.max_bullets_per_slide
+    if lines > limit:
+        pytest.skip(f"все рамки вмещают {lines - 1}+ строк — больше порога ТЗ {limit}")
 
     class ShortensLinesOnly(ScriptedRewriter):
         def complete(self, step, prompt, schema, images=None):
             self.calls += 1
             blocks = [
-                {"id": line.strip()[1 : line.strip().index("]")], "items": [
-                    "Проблема: фрагментация",
-                    "Решение: платформа",
-                    "Доказательства: пилот",
-                    "Предложение: запуск",
-                ]}
+                {
+                    "id": line.strip()[1 : line.strip().index("]")],
+                    "items": [f"Пункт {chr(0x410 + n)}" for n in range(lines)],
+                }
                 for line in prompt.splitlines()
                 if line.strip().startswith("[") and "]" in line
             ]

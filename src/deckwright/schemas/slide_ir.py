@@ -168,6 +168,10 @@ class Element(BaseModel):
     image: ImageContent | None = None
     shape: ShapeContent | None = None
     children: list[Element] = Field(default_factory=list)
+    # Фон, на котором лежит элемент, если он не фон слайда: карточка или
+    # панель донора. По нему и только по нему мерится контраст текста —
+    # светлый текст на тёмной панели светлого слайда законен.
+    backdrop: Color | None = None
 
     @model_validator(mode="after")
     def _payload_matches_kind(self) -> Element:
