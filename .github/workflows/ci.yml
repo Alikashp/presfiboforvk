@@ -101,3 +101,16 @@ jobs:
       # завершается, а проверить надо именно окружение внутри образа.
       - name: Запуск проверки окружения в собранном образе
         run: docker run --rm deckwright:ci deckwright doctor
+
+      # Та же команда запуска, что на хостинге: порт из $PORT, проверка
+      # здоровья по адресу из railway.json. Контейнер, который собирается,
+      # но не отвечает, иначе обнаружился бы только после деплоя.
+      - name: Веб-интерфейс отвечает на порту из $PORT
+        run: |
+          docker run -d --name ui -e PORT=8080 -p 8080:8080 deckwright:ci
+          for i in $(seq 1 60); do
+            if curl -fsS http://localhost:8080/_stcore/health; then exit 0; fi
+            sleep 2
+          done
+          docker logs ui
+          exit 1

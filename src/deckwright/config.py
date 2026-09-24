@@ -36,6 +36,11 @@ class StepParams(BaseModel):
     max_tokens: int = Field(default=2000, gt=0)
     enable_thinking: bool = False
     reasoning_effort: str | None = None
+    # Через сколько секунд без ответа отправить второй такой же запрос и
+    # взять первый пришедший ответ. Не задано — дубля нет. Нужен шагу, чей
+    # разброс времени ломает бюджет: планировщик на шести живых вызовах —
+    # от 47.5 до 194.9 с при бюджете 300 на всю генерацию.
+    hedge_after_seconds: float | None = Field(default=None, gt=0)
 
 
 class ModelConfig(BaseModel):

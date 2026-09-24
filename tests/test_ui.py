@@ -117,3 +117,43 @@ def test_message_is_escaped(slide_png):
     html = audit_overlay.render(slide_png, [issue], SLIDE_W, SLIDE_H)
     assert "<script>" not in html
     assert "&lt;script&gt;" in html
+
+
+# ── Вход по паролю ───────────────────────────────────────────────────────────
+
+
+def _app(monkeypatch, password: str | None):
+    from streamlit.testing.v1 import AppTest
+
+    if password is None:
+        monkeypatch.delenv("DECKWRIGHT_PASSWORD", raising=False)
+    else:
+        monkeypatch.setenv("DECKWRIGHT_PASSWORD", password)
+    root = Path(__file__).resolve().parents[1]
+    monkeypatch.chdir(root)
+    return AppTest.from_file(str(root / "app" / "ui.py"), default_timeout=60)
+
+
+def test_password_closes_the_interface(monkeypatch):
+    """С паролем в окружении без входа не видно ни загрузки шаблона, ни прогонов."""
+    app = _app(monkeypatch, "секрет").run()
+    assert len(app.text_input) == 1 and app.text_input[0].label == "Пароль"
+    assert not app.sidebar.button, "кнопка «Собрать» доступна без пароля"
+
+
+def test_wrong_password_is_refused_and_right_one_lets_in(monkeypatch):
+    app = _app(monkeypatch, "секрет").run()
+    app.text_input[0].input("не тот")
+    app.button[0].click().run()
+    assert app.error and "Неверный пароль" in app.error[0].value
+    assert not app.sidebar.button
+
+    app.text_input[0].input("секрет")
+    app.button[0].click().run()
+    assert app.sidebar.button, "после верного пароля интерфейс не открылся"
+
+
+def test_without_password_the_interface_is_open(monkeypatch):
+    app = _app(monkeypatch, None).run()
+    assert not [field for field in app.text_input if field.label == "Пароль"]
+    assert app.sidebar.button

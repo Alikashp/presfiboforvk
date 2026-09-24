@@ -102,3 +102,92 @@ def test_image_estimate_scales_with_area():
     large = estimate_image_tokens(1920, 1080)
     assert abs(large - 4 * small) <= 1
     assert estimate_text_tokens("") >= 1
+
+
+# ── Дубль запроса (hedge_after_seconds) ──────────────────────────────────────
+
+
+def _hedged_client(delays: list[float], hedge_after: float = 0.2):
+    """Клиент, у которого провайдер отвечает с заданными задержками по очереди."""
+    import threading
+    import time as _time
+    from types import SimpleNamespace
+
+    from pydantic import BaseModel
+
+    from deckwright.config import ModelConfig, StepParams
+    from deckwright.llm.client import LiveClient
+
+    class Answer(BaseModel):
+        copy_no: int
+
+    cfg = ModelConfig(
+        base_url="http://provider.invalid/v1",
+        api_key="test",
+        model="test-model",
+        tokens_per_minute=40_000,
+        steps={"plan_deck": StepParams(max_tokens=6000, hedge_after_seconds=hedge_after)},
+    )
+    client = LiveClient(cfg)
+    lock = threading.Lock()
+    order = iter(range(len(delays)))
+
+    def create(**_):
+        with lock:
+            copy = next(order)
+        _time.sleep(delays[copy])
+        return SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(
+                        content=f'{{"copy_no": {copy}}}', reasoning_content=None
+                    )
+                )
+            ],
+            usage=SimpleNamespace(prompt_tokens=2700, completion_tokens=2000, total_tokens=4700),
+        )
+
+    client._client = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=create))
+    )
+    return client, Answer
+
+
+def test_slow_answer_is_overtaken_by_the_hedge():
+    """Первый запрос завис — через `hedge_after_seconds` уходит второй и отвечает."""
+    import time as _time
+
+    client, Answer = _hedged_client([2.0, 0.1])
+    started = _time.monotonic()
+    answer = client.complete("plan_deck", "план", Answer)
+    elapsed = _time.monotonic() - started
+
+    assert answer.copy_no == 1
+    assert elapsed < 1.0, f"ждали медленную копию: {elapsed:.2f} с"
+    assert client.hedges == 1 and client.hedge_wins == 1
+
+
+def test_fast_answer_sends_no_hedge():
+    """Уложился до порога — второй запрос не уходит и токены не тратятся."""
+    client, Answer = _hedged_client([0.05, 0.05])
+    answer = client.complete("plan_deck", "план", Answer)
+    assert answer.copy_no == 0
+    assert client.hedges == 0 and client.calls == 1
+
+
+def test_both_copies_are_counted_by_the_token_limiter():
+    """Дубль — это второй запрос в окне TPM, а не бесплатная страховка.
+
+    Замер для планировщика: одна копия резервирует ≈8.7 тыс. токенов (вход
+    ≈2.7 тыс. плюс потолок ответа 6000), две — 17.4 тыс. из 40 тыс.; после
+    ответа резерв заменяется фактом.
+    """
+    import time as _time
+
+    client, Answer = _hedged_client([0.6, 0.1])
+    client.complete("plan_deck", "план", Answer)
+    _time.sleep(0.7)  # проигравшая копия доходит сама
+    window = client.limiter.snapshot()
+    assert window["requests_in_window"] == 2
+    assert window["tokens_in_window"] == 2 * 4700
+    assert window["waits"] == 0, "ограничитель заставил дубль ждать"

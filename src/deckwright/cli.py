@@ -161,7 +161,8 @@ def _cmd_run(args: argparse.Namespace) -> int:
                     f"[{variant}] модель {usage.role}: вызовов {usage.calls}, "
                     f"повторов {usage.retries}, ответов 429 {usage.rate_limit_hits}, "
                     f"токенов {usage.prompt_tokens}+{usage.completion_tokens}, "
-                    f"самый долгий вызов {usage.slowest_call_seconds}с"
+                    f"самый долгий вызов {usage.slowest_call_seconds}с, "
+                    f"дублей {usage.hedges} (ответил первым {usage.hedge_wins})"
                 )
 
         # Что цикл исправления сделал с колодой. Молчать об этом нельзя:
@@ -344,6 +345,11 @@ def _cmd_probe(args: argparse.Namespace) -> int:
     failed = False
     plan = None
     budget = None
+    # Та же ёмкость макетов, что уходит в промпт в настоящем прогоне: иначе
+    # проба проверяет не тот промпт.
+    from deckwright.pipeline import plan_limits
+
+    limits = plan_limits(spec, cfg) if spec is not None else ()
 
     for attempt in range(1, args.repeats + 1):
         before = _counters()
@@ -357,6 +363,7 @@ def _cmd_probe(args: argparse.Namespace) -> int:
                 max_bullets=cfg.audit.max_bullets_per_slide,
                 max_words_per_bullet=cfg.audit.max_words_per_bullet,
                 substitution_slack=cfg.fonts.substitution_slack,
+                block_limits=limits,
             )
         except Exception as exc:  # диагностика обязана досказать, что произошло
             failed = True
@@ -379,6 +386,8 @@ def _cmd_probe(args: argparse.Namespace) -> int:
             f"бюджет длины    : заголовок {budget.title_chars}, "
             f"пункт {budget.bullet_chars} симв; мерили: {budget.measured_with}"
         )
+        for kind, items, chars in budget.block_limits:
+            print(f"ёмкость макетов : {kind} — {items} × {chars} симв")
 
     if runs:
         print(f"\nпрогонов        : {len(runs)} из {args.repeats}")

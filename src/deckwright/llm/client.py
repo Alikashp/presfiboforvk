@@ -22,7 +22,9 @@ from __future__ import annotations
 
 import base64
 import json
+import queue
 import re
+import threading
 import time
 from typing import TypeVar
 
@@ -138,6 +140,9 @@ class LiveClient:
         # таймауте и сбое соединения: они нигде больше не видны. Вызов дольше
         # `timeout_seconds` — это и есть такой невидимый повтор.
         self.slowest_call_seconds = 0.0
+        # Сколько раз ушёл дубль запроса и сколько раз он ответил первым.
+        self.hedges = 0
+        self.hedge_wins = 0
         # Ответы 429. SDK сам повторяет их с выдержкой; счётчик нужен, чтобы
         # было видно, упёрлись ли мы в лимит провайдера, а не гадать по времени.
         self.rate_limit_hits = 0
@@ -249,6 +254,48 @@ class LiveClient:
         self.last_raw = content
         return content
 
+    def _ask_hedged(self, step: str, messages: list[dict], estimated: int) -> str:
+        """Запрос с дублем: если за `hedge_after_seconds` ответа нет — второй такой же.
+
+        Берётся первый пришедший ответ. Медленный ответ провайдера — не сбой:
+        таймаут с повтором его обрывает и ждёт заново, а дубль даёт ему
+        дойти и лишь страхует. На замеренных вызовах: 89.8 с остаётся 89.8,
+        194.9 с становятся ≈111 (60 с ожидания + обычный вызов).
+
+        Каждая копия занимает своё место в окне ограничителя, так что лимит
+        токенов в минуту учитывает обе. Потоки фоновые: проигравший запрос
+        доходит сам и не держит процесс при выходе.
+        """
+        delay = self._cfg.step(step).hedge_after_seconds
+        if not delay:
+            return self._ask(step, messages, estimated)
+
+        results: queue.Queue = queue.Queue()
+
+        def attempt(copy: int) -> None:
+            try:
+                results.put((copy, self._ask(step, messages, estimated), None))
+            except Exception as failure:  # отказ копии не роняет вторую
+                results.put((copy, None, failure))
+
+        threading.Thread(target=attempt, args=(0,), daemon=True).start()
+        try:
+            copy, raw, failure = results.get(timeout=delay)
+            launched = 1
+        except queue.Empty:
+            self.hedges += 1
+            threading.Thread(target=attempt, args=(1,), daemon=True).start()
+            copy, raw, failure = results.get()
+            launched = 2
+        if failure is not None and launched == 2:
+            # Первая пришедшая копия упала — ждём вторую.
+            copy, raw, failure = results.get()
+        if failure is not None:
+            raise failure
+        if copy == 1:
+            self.hedge_wins += 1
+        return raw
+
     def _rejected_param(self, message: str) -> str | None:
         match = _UNKNOWN_PARAM.search(message)
         if match is None:
@@ -268,7 +315,7 @@ class LiveClient:
         estimated = self._estimate(step, messages, images)
         last_error = ""
         for _ in range(self._cfg.max_retries + 1):
-            raw = self._ask(step, messages, estimated)
+            raw = self._ask_hedged(step, messages, estimated)
             try:
                 return schema.model_validate_json(strip_wrapping(raw))
             except ValidationError as exc:

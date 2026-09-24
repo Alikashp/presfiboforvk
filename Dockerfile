@@ -22,6 +22,10 @@ COPY configs/ ./configs/
 COPY prompts/ ./prompts/
 COPY agents/ ./agents/
 COPY app/ ./app/
+# Демонстрационный контент-пакет и записанные ответы модели: интерфейс
+# предлагает их галочками, и без них в образе галочка роняла прогон.
+COPY tests/fixtures/content_pack.json ./tests/fixtures/content_pack.json
+COPY tests/fixtures/recorded/ ./tests/fixtures/recorded/
 
 RUN mkdir -p /app/outputs /app/.cache/templates /app/.cache/fonts
 
@@ -30,5 +34,7 @@ RUN mkdir -p /app/outputs /app/.cache/templates /app/.cache/fonts
 RUN deckwright doctor
 
 EXPOSE 8501
-CMD ["streamlit", "run", "app/ui.py", \
-     "--server.address=0.0.0.0", "--server.port=8501", "--server.headless=true"]
+# Порт — из $PORT, если хостинг его задаёт (Railway задаёт), иначе 8501.
+# Статистика использования Streamlit выключена: это исходящий трафик, по
+# которому хостинг считает сервис активным и не даёт ему уснуть.
+CMD ["sh", "-c", "exec streamlit run app/ui.py --server.address=0.0.0.0 --server.port=${PORT:-8501} --server.headless=true --browser.gatherUsageStats=false"]

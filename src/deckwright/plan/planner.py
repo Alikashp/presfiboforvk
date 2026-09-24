@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import hashlib
+from dataclasses import replace
 from pathlib import Path
 
 import yaml
@@ -93,6 +94,7 @@ def build_plan(
     max_words_per_bullet: int = 15,
     substitution_slack: float = 0.8,
     prompts_dir: str | Path | None = None,
+    block_limits: tuple[tuple[str, int, int], ...] = (),
 ) -> tuple[DeckPlan, Prompt, LengthBudget | None]:
     """План, использованный промпт и бюджеты длины.
 
@@ -101,7 +103,7 @@ def build_plan(
     шаблона модель работает по одним порогам плотности из ТЗ — план тогда
     может не влезть, и разбираться с этим придётся фиттеру.
     """
-    prompt = load_prompt("plan_deck.v2", prompts_dir)
+    prompt = load_prompt("plan_deck.v3", prompts_dir)
     budget = (
         compute_budget(
             spec, max_bullets, max_words_per_bullet, substitution_slack=substitution_slack
@@ -109,6 +111,8 @@ def build_plan(
         if spec is not None
         else None
     )
+    if budget is not None and block_limits:
+        budget = replace(budget, block_limits=block_limits)
     limits = (
         budget.as_prompt_lines()
         if budget is not None
