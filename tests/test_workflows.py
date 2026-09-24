@@ -7,12 +7,14 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
 import yaml
 
-WORKFLOWS = sorted((Path(__file__).resolve().parents[1] / ".github" / "workflows").glob("*.yml"))
+ROOT = Path(__file__).resolve().parents[1]
+WORKFLOWS = sorted((ROOT / ".github" / "workflows").glob("*.yml"))
 
 # Workflow'ы, которым разрешено обращаться к секретам. Всё остальное обязано
 # работать без ключей — на записанных ответах.
@@ -204,3 +206,26 @@ def test_audit_probe_always_runs_against_a_spoiled_deck():
     assert "audit-probe" in workflow, "режим живого аудита не заведён в workflow"
     audit_step = workflow[workflow.index("deckwright audit-probe") :]
     assert "--spoil" in audit_step[:600], "живой аудит запускается без испорченной колоды"
+
+
+# ── Деплой ───────────────────────────────────────────────────────────────────
+
+
+def test_railway_sleeps_and_checks_health_where_streamlit_answers():
+    """Засыпание без трафика и проверка здоровья — в коде, а не в настройках панели."""
+    config = json.loads((ROOT / "railway.json").read_text("utf-8"))
+    assert config["build"]["builder"] == "DOCKERFILE"
+    assert config["deploy"]["sleepApplication"] is True
+    assert config["deploy"]["healthcheckPath"] == "/_stcore/health"
+
+
+def test_image_carries_everything_the_interface_reads():
+    """Интерфейс читает фикстуры из репозитория — образ обязан их содержать."""
+    dockerfile = (ROOT / "Dockerfile").read_text("utf-8")
+    ui = (ROOT / "app" / "ui.py").read_text("utf-8")
+    for constant in ("SAMPLE_PACK", "RECORDED"):
+        line = next(row for row in ui.splitlines() if row.startswith(f"{constant} ="))
+        parts = [part.strip('" ') for part in line.split("=", 1)[1].split("/")[1:]]
+        relative = "/".join(parts)
+        assert f"COPY {relative}" in dockerfile, f"{relative} не попадает в образ"
+    assert "${PORT:-8501}" in dockerfile, "порт хостинга не подхватывается"

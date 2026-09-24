@@ -35,11 +35,13 @@ from deckwright.audit import rewrite as rewrite_step
 from deckwright.audit.fixers import apply as apply_fixes
 from deckwright.audit.report import audit_deck
 from deckwright.config import Config
+from deckwright.layout.capacity import achievable
 from deckwright.layout.matcher import build_deck_ir
+from deckwright.layout.strategy import Strategy
 from deckwright.layout.text_metrics import metrics_for_spec
 from deckwright.llm.base import StructuredClient
 from deckwright.parse.opener import parse_template
-from deckwright.plan.budget import LengthBudget
+from deckwright.plan.budget import LengthBudget, compute_budget
 from deckwright.plan.planner import Prompt, build_plan
 from deckwright.render.html import export_html
 from deckwright.render.package_check import check_package
@@ -148,6 +150,30 @@ class _RunContext:
     # Реестр композиций вариантов из `PreparedPlan`: пересборка после правки
     # обязана избегать того же, что и первая сборка.
     layouts: dict[str, dict[int, str]] | None = None
+
+
+def plan_limits(spec: TemplateSpec, cfg: Config) -> tuple[tuple[str, int, int], ...]:
+    """Ёмкость макетов шаблона для бюджета планировщика: {вид блока: пунктов, символов}.
+
+    Считается слоем вёрстки тем же предсказателем, по которому она потом
+    выбирает макет, и для всех вариантов сразу: план один на три варианта.
+    Планировщику уходят только числа — про макеты он не знает.
+    """
+    hint = compute_budget(
+        spec,
+        cfg.audit.max_bullets_per_slide,
+        cfg.audit.max_words_per_bullet,
+        substitution_slack=cfg.fonts.substitution_slack,
+    )
+    strategies = [Strategy.from_config(variant) for variant in cfg.variants]
+    capacity = achievable(
+        spec,
+        strategies,
+        item_chars=hint.bullet_chars,
+        title_chars=hint.title_chars,
+        max_items=cfg.audit.max_bullets_per_slide,
+    )
+    return tuple((kind.value, cap.items, cap.chars) for kind, cap in capacity.items())
 
 
 def _step_params(model_cfg, steps: tuple[str, ...]) -> dict[str, dict[str, object]]:
@@ -490,6 +516,8 @@ def _record_vlm(manifest: RunManifest, cfg: Config, client: StructuredClient | N
             thinking_blocks=getattr(client, "thinking_blocks", 0),
             rate_limit_hits=getattr(client, "rate_limit_hits", 0),
             slowest_call_seconds=getattr(client, "slowest_call_seconds", 0.0),
+            hedges=getattr(client, "hedges", 0),
+            hedge_wins=getattr(client, "hedge_wins", 0),
             cost_usd=cfg.vlm.cost_usd(
                 getattr(client, "prompt_tokens", 0), getattr(client, "completion_tokens", 0)
             ),
@@ -618,6 +646,7 @@ def run_variant(
                 max_bullets=cfg.audit.max_bullets_per_slide,
                 max_words_per_bullet=cfg.audit.max_words_per_bullet,
                 substitution_slack=cfg.fonts.substitution_slack,
+                block_limits=plan_limits(spec, cfg),
             )
             prepared = PreparedPlan(plan=plan, prompt=prompt, budget=budget)
     if budget is not None:
@@ -641,6 +670,8 @@ def run_variant(
             thinking_blocks=getattr(client, "thinking_blocks", 0),
             rate_limit_hits=getattr(client, "rate_limit_hits", 0),
             slowest_call_seconds=getattr(client, "slowest_call_seconds", 0.0),
+            hedges=getattr(client, "hedges", 0),
+            hedge_wins=getattr(client, "hedge_wins", 0),
             cost_usd=cfg.llm.cost_usd(
                 getattr(client, "prompt_tokens", 0), getattr(client, "completion_tokens", 0)
             ),

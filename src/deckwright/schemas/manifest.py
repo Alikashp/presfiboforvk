@@ -48,6 +48,10 @@ class ModelUsage(BaseModel):
     # Самый долгий вызов, с повторами SDK внутри. Дольше таймаута — значит,
     # был повтор, которого счётчики выше не видят.
     slowest_call_seconds: float = Field(default=0.0, ge=0)
+    # Дубли запроса (`hedge_after_seconds`): сколько ушло и сколько ответило
+    # первым. Каждый дубль — лишние токены, и это должно быть видно.
+    hedges: int = Field(default=0, ge=0)
+    hedge_wins: int = Field(default=0, ge=0)
     cost_usd: float = Field(default=0.0, ge=0)
     # Ответы, в которых пришёл блок рассуждений. Модели семейства Qwen3 умеют
     # его выдавать, и тогда ответ перестаёт быть чистым JSON.

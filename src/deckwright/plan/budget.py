@@ -53,16 +53,55 @@ class LengthBudget:
     # Чем мерили: шрифтом шаблона, метрическим клоном или чужой гарнитурой.
     measured_with: str
     metric_compatible: bool = True
+    # Ёмкость по видам блоков, снятая с макетов шаблона: {вид: (пунктов,
+    # символов в пункте)}. Считает слой вёрстки тем же предсказателем, по
+    # которому потом выбирает макет; здесь это только числа.
+    block_limits: tuple[tuple[str, int, int], ...] = ()
+
+    def limit_for(self, kind: str) -> tuple[int, int] | None:
+        for name, items, chars in self.block_limits:
+            if name == kind and items:
+                return items, chars
+        return None
 
     def as_prompt_lines(self) -> str:
-        """Ограничения в том виде, в каком они уходят в промпт."""
-        return (
-            f"- заголовок слайда: не длиннее {self.title_chars} символов\n"
-            f"- подзаголовок: не длиннее {self.subtitle_chars} символов\n"
-            f"- пункт списка: не длиннее {self.bullet_chars} символов "
-            f"и не длиннее {self.max_words_per_bullet} слов\n"
-            f"- пунктов на слайде: не больше {self.max_bullets}"
-        )
+        """Ограничения в том виде, в каком они уходят в промпт.
+
+        Если ёмкость макетов известна, она заменяет общий порог «до шести
+        пунктов»: живой план #12 этому порогу подчинился и всё равно
+        переполнил 37 слайдов из 90 — рамки вмещали от одной до четырёх строк.
+        """
+        lines = [
+            f"- заголовок слайда: не длиннее {self.title_chars} символов",
+            f"- подзаголовок: не длиннее {self.subtitle_chars} символов",
+        ]
+        listed = self.limit_for("bullets")
+        steps = self.limit_for("steps")
+        paragraph = self.limit_for("paragraph")
+        if listed:
+            lines.append(
+                f"- список (bullets): не больше {listed[0]} пунктов, каждый не длиннее "
+                f"{listed[1]} символов и {self.max_words_per_bullet} слов"
+            )
+        if steps:
+            lines.append(
+                f"- шаги (steps): не больше {steps[0]} шагов, каждый не длиннее "
+                f"{steps[1]} символов"
+            )
+        if paragraph:
+            lines.append(f"- абзац (paragraph): не длиннее {paragraph[1]} символов")
+        if not listed:
+            lines.append(
+                f"- пункт списка: не длиннее {self.bullet_chars} символов "
+                f"и не длиннее {self.max_words_per_bullet} слов"
+            )
+            lines.append(f"- пунктов на слайде: не больше {self.max_bullets}")
+        else:
+            lines.append(
+                "- больше пунктов, чем сказано, в блок не помещается: разнеси "
+                "содержание на два слайда или оставь главное"
+            )
+        return "\n".join(lines)
 
 
 def _demonstrated_length(spec: TemplateSpec, role: SlotRole) -> int:

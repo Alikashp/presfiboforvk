@@ -99,6 +99,10 @@ streamlit run app/ui.py
 | `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL` | OpenAI-совместимый endpoint модели с открытыми весами |
 | `VLM_BASE_URL`, `VLM_API_KEY`, `VLM_MODEL` | модель со зрением для контекстного аудита; может совпадать с LLM |
 | `T2I_BASE_URL`, `T2I_API_KEY`, `T2I_MODEL` | text-to-image; по умолчанию выключено |
+| `DECKWRIGHT_PASSWORD` | пароль на веб-интерфейс; не задан — вход открыт (локальный запуск) |
+
+Деплой по адресу в браузере (Railway, пароль, засыпание без трафика) —
+пошагово в [`docs/DEPLOY.md`](docs/DEPLOY.md).
 
 ## Веб-интерфейс
 
@@ -136,5 +140,6 @@ streamlit run app/ui.py        # или docker compose up --build
 | пайплайн и границы слоёв | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) |
 | модели, лицензии, требования | [`docs/MODELS.md`](docs/MODELS.md) |
 | проверки аудита и покрытие | [`docs/AUDIT.md`](docs/AUDIT.md) |
+| деплой на Railway | [`docs/DEPLOY.md`](docs/DEPLOY.md) |
 | контракт и критерии приёмки | [`specs/spec.md`](specs/spec.md) |
 | исследование и обоснование архитектуры | [`research/research.md`](research/research.md) |

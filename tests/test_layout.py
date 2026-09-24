@@ -491,3 +491,52 @@ def test_lists_are_read_at_the_body_size_of_the_template(specs):
     for name, spec in specs:
         if role_typical(spec, SlotRole.BODY):
             assert role_typical(spec, SlotRole.BULLETS) > 0, name
+
+
+# ── Шаг 2: ёмкость для планировщика ─────────────────────────────────────────
+
+
+def test_declared_capacity_really_fits_in_every_variant(specs):
+    """Что обещано планировщику, то вёрстка обязана уложить во всех трёх вариантах."""
+    from deckwright.layout.capacity import _probe, _text, achievable
+    from deckwright.layout.matcher import _blocks_fit, _title_fits, _usable_slots
+
+    cfg = load_config(CONFIG)
+    strategies = [Strategy.from_config(cfg.variant(v)) for v in VARIANTS]
+    for name, spec in specs:
+        metrics = metrics_for_spec(spec).metrics
+        if metrics is None:
+            continue
+        ladders = {role: ladder_for_role(spec, role) for role in SlotRole}
+        capacity = achievable(spec, strategies, item_chars=34, title_chars=34, max_items=6)
+        for kind, cap in capacity.items():
+            assert cap.items <= 6, f"{name}/{kind}: больше порога ТЗ"
+            if not cap.items:
+                continue
+            slide = _probe(kind, cap.items, cap.chars, _text(24))
+            for strategy in strategies:
+                assert any(
+                    _usable_slots(p, spec.slide_width_emu, spec.slide_height_emu)
+                    and _title_fits(p, slide, strategy, metrics, ladders[SlotRole.TITLE])
+                    and _blocks_fit(p, spec, slide, strategy, metrics, ladders)
+                    for p in spec.patterns
+                ), f"{name}/{strategy.name}: {kind} {cap.items}×{cap.chars} не влезает"
+
+
+def test_planner_is_told_the_capacity_not_the_generic_threshold():
+    """В промпт уходит «не больше 3 пунктов», а не общий порог «до 6»."""
+    from deckwright.plan.budget import LengthBudget
+
+    budget = LengthBudget(
+        title_chars=34,
+        subtitle_chars=27,
+        bullet_chars=34,
+        max_bullets=6,
+        max_words_per_bullet=15,
+        measured_with="тест",
+        block_limits=(("bullets", 3, 34), ("paragraph", 1, 153)),
+    )
+    lines = budget.as_prompt_lines()
+    assert "не больше 3 пунктов" in lines
+    assert "абзац (paragraph): не длиннее 153" in lines
+    assert "не больше 6" not in lines

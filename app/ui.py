@@ -10,6 +10,10 @@
 потоке (`app/runs.py`), его `run_id` — в параметрах адреса, и обновление
 страницы возвращает к тому же прогону.
 
+**Вход по паролю, если он задан.** Сервис, выложенный по адресу, тратит
+ключ модели на каждый прогон. `DECKWRIGHT_PASSWORD` в окружении закрывает
+интерфейс паролем; не задан — вход открыт (локальный запуск).
+
 **Находки показываются на слайде, а не только списком.** «Элемент заходит в
 поля» без рамки — загадка; номер рамки совпадает с номером в списке
 (`app/audit_overlay.py`).
@@ -17,7 +21,9 @@
 
 from __future__ import annotations
 
+import hmac
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -45,6 +51,30 @@ FIX_EXPLANATION = {
     FixKind.MANUAL: "чинится руками",
     FixKind.NONE: "информационная",
 }
+
+
+PASSWORD_ENV = "DECKWRIGHT_PASSWORD"
+
+
+def _require_password() -> bool:
+    """Пускает дальше, только если пароль не задан или введён верно.
+
+    Сравнение — `hmac.compare_digest`: время ответа не выдаёт, сколько
+    символов совпало. Отметка о входе живёт в сессии браузера: обновление
+    страницы пароль заново не спрашивает, новая вкладка — спрашивает.
+    """
+    expected = os.environ.get(PASSWORD_ENV, "")
+    if not expected or st.session_state.get("authorized"):
+        return True
+    with st.form("login"):
+        entered = st.text_input("Пароль", type="password")
+        submitted = st.form_submit_button("Войти")
+    if submitted:
+        if hmac.compare_digest(entered.encode("utf-8"), expected.encode("utf-8")):
+            st.session_state["authorized"] = True
+            st.rerun()
+        st.error("Неверный пароль.")
+    return False
 
 
 def _save_upload(uploaded, directory: Path) -> Path:
@@ -321,7 +351,15 @@ def main() -> None:
         "три варианта вёрстки, аудит поверх слайда, экспорт в три формата."
     )
 
+    if not _require_password():
+        return
+
     cfg = load_config(CONFIG)
+    if cfg.llm.configured and not os.environ.get(PASSWORD_ENV):
+        st.warning(
+            f"Ключ модели настроен, а пароль ({PASSWORD_ENV}) — нет: любой, "
+            "кто знает адрес, тратит ключ. Для публичного адреса задайте пароль."
+        )
     request = _sidebar(cfg)
 
     if request is not None:
