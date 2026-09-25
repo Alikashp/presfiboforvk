@@ -258,9 +258,11 @@ def test_planner_is_told_how_long_the_cover_and_closing_may_be():
     budget = LengthBudget(
         title_chars=40, subtitle_chars=30, bullet_chars=50, max_bullets=6,
         max_words_per_bullet=15, measured_with="test",
-        block_limits=(("cover_title", 1, 60), ("cover_text", 1, 22), ("closing_text", 1, 90)),
+        block_limits=(
+            ("cover_title", 1, 60), ("cover_text", 0, 0), ("closing_text", 1, 90),
+        ),
     )
     lines = budget.as_prompt_lines()
     assert "титульный слайд: заголовок не длиннее 60 символов" in lines
-    assert "один абзац не длиннее 22 символов" in lines
-    assert "завершающий слайд: текст под ним — один абзац не длиннее 90" in lines
+    assert "места под подзаголовок нет — только заголовок" in lines
+    assert "завершающий слайд: подзаголовок под ним — один абзац не длиннее 90" in lines

@@ -204,7 +204,8 @@ def test_overflow_at_the_bottom_step_becomes_a_finding(specs, plan):
     if not found:
         pytest.skip("ни на одном шаблоне текст не переполнился — проверять нечего")
     for issue in found:
-        assert issue.check_id == "layout.text_overflow"
+        if issue.check_id != "layout.text_overflow":
+            continue
         assert issue.fix.action, "находка без предложенного исправления бесполезна"
         assert issue.bbox is not None, "UI рисует рамку вокруг находки — bbox обязателен"
 

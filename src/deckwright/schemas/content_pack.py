@@ -102,6 +102,11 @@ class Brief(BaseModel):
     goal: str = ""
     language: str = Field(default="ru", pattern=r"^[a-z]{2}$")
     extra_instructions: str = ""
+    # Кто выступает: подпись спикера на обложке и финале шаблона. Пусто —
+    # блок спикера убирается целиком, с кружком под фото: подпись спикера —
+    # не место для урезанного подзаголовка.
+    author: str = ""
+    author_role: str = ""
 
 
 class ContentPack(BaseModel):

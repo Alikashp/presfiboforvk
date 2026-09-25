@@ -115,8 +115,12 @@ class LengthBudget:
             parts = []
             if title:
                 parts.append(f"заголовок не длиннее {title[0][1]} символов")
-            if text:
-                parts.append(f"текст под ним — один абзац не длиннее {text[0][1]} символов")
+            if text and text[0][1]:
+                parts.append(
+                    f"подзаголовок под ним — один абзац не длиннее {text[0][1]} символов"
+                )
+            elif text:
+                parts.append("места под подзаголовок нет — только заголовок, без блоков")
             if parts:
                 lines.append(f"- {name}: " + ", ".join(parts))
         return "\n".join(lines)
