@@ -322,6 +322,8 @@ def render_deck(
             )
 
         candidates = _text_shapes(slide)
+        # Где у донора был текст — до того, как его заменят или сотрут.
+        donor_text = [box for box, shape in candidates if shape.text_frame.text.strip()]
         filled: list[Box] = []
         for element in slide_ir.elements:
             used = _render_element(slide, element, candidates, accent, slide_ir)
@@ -338,6 +340,7 @@ def render_deck(
             slide, patterns.get(slide_ir.pattern_id), filled, deck
         )
         _drop_unfilled_data_frames(slide, filled)
+        _drop_emptied_panels(slide, donor_text, filled, deck)
 
         _drop_unfilled_placeholders(slide, filled)
         if slide_ir.speaker_notes:
@@ -446,22 +449,29 @@ def _drop_unfilled_data_frames(slide, filled: list[Box]) -> int:
 def _item_band(repeater, index: int, slide_w: int, slide_h: int) -> Box:
     """Полоса слайда, занятая одним элементом повторителя.
 
-    Не рамка элемента: парсер снимает её с текстовой подписи, а у элемента
-    есть ещё плашка и пиктограмма — отдельные фигуры рядом. На `vk_workspace`
-    подпись стоит в 7.47 дюйма, кнопка со стрелкой в 6.47, и удаление «по
-    рамке» оставляло три пустые кнопки при одной подписи.
+    Не рамка текста: у элемента есть ещё подложка, плашка и пиктограмма —
+    отдельные фигуры рядом. На `vk_workspace` подпись стоит в 7.47 дюйма,
+    кнопка со стрелкой в 6.47, и удаление «по рамке» оставляло три пустые
+    кнопки при одной подписи. Вдоль оси повторения полоса берётся по рамке
+    всего элемента (`member_frames`): подложка карточки на `vk_tech` шире текста,
+    и по рамке текста она оставалась на слайде пустой.
 
-    Полоса берёт весь слайд поперёк оси повторения: у вертикального ряда это
+    Поперёк оси полоса берёт весь слайд: у вертикального ряда это
     горизонтальная лента, у горизонтального — вертикальная. Так в неё попадают
-    все фигуры строки, где бы они по другой оси ни стояли.
+    все фигуры строки, где бы они по другой оси ни стояли. У сетки в
+    несколько рядов такой ленты нет — там полоса равна клетке элемента.
     """
-    horizontal = repeater.axis != "vertical"
-    offset = index * repeater.pitch_emu
-    if horizontal:
-        return Box(
-            x=repeater.item_box.x + offset, y=0, w=repeater.item_box.w, h=slide_h
-        )
-    return Box(x=0, y=repeater.item_box.y + offset, w=slide_w, h=repeater.item_box.h)
+    if index < len(repeater.member_frames):
+        frame = repeater.member_frames[index]
+    else:
+        dx, dy = repeater.offset(index)
+        item = repeater.item_box
+        frame = Box(x=item.x + dx, y=item.y + dy, w=item.w, h=item.h)
+    if repeater.axis == "grid":
+        return frame
+    if repeater.axis != "vertical":
+        return Box(x=frame.x, y=0, w=frame.w, h=slide_h)
+    return Box(x=0, y=frame.y, w=slide_w, h=frame.h)
 
 
 def _drop_unused_repeater_items(slide, pattern, filled: list[Box], deck: DeckIR) -> int:
@@ -496,6 +506,71 @@ def _drop_unused_repeater_items(slide, pattern, filled: list[Box], deck: DeckIR)
                     parent.remove(element)
                     removed += 1
     return removed
+
+
+# Панель — залитая фигура заметного размера, но не фон всего слайда.
+_PANEL_MIN_SHARE = 0.01
+_PANEL_MAX_SHARE = 0.6
+# Какая доля нашего элемента должна лежать на панели, чтобы она считалась
+# занятой им.
+_PANEL_USE_SHARE = 0.5
+_FILLS = ("solidFill", "gradFill", "pattFill", "blipFill")
+
+
+def _has_fill(element) -> bool:
+    return any(
+        etree.QName(child).localname in _FILLS
+        for sppr in element.xpath("./*[local-name()='spPr']")
+        for child in sppr
+    )
+
+
+def _drop_emptied_panels(slide, donor_text: list[Box], filled: list[Box], deck: DeckIR) -> int:
+    """Убирает панели донора, у которых не осталось содержания.
+
+    Карточка, плашка, кнопка, серая панель под таблицей — у донора в них
+    был текст. Если нашему содержанию место в них не досталось, текст
+    стёрт, а подложка осталась: пустая карточка, пустая кнопка, пустая
+    таблица-заглушка из линий. На листах #12 это самый частый дефект — 41
+    слайд из 90. Панель уходит вместе со всем, что на ней лежит.
+
+    Панель, на которой донор текста не держал, — декор, и её не трогаем.
+    """
+    tree = slide.shapes._spTree
+    slide_area = deck.slide_width_emu * deck.slide_height_emu
+    removed = 0
+    for element, box, _ in list(iter_shapes(tree)):
+        if box is None or etree.QName(element).localname not in ("sp", "pic"):
+            continue
+        if tree not in element.iterancestors():
+            continue
+        if not _PANEL_MIN_SHARE * slide_area <= box.area <= _PANEL_MAX_SHARE * slide_area:
+            continue
+        # Картинка — тоже подложка: на `vk_tech` серая панель под рыбной
+        # таблицей нарисована картинкой.
+        if etree.QName(element).localname == "sp" and not _has_fill(element):
+            continue
+        if not any(_inside(text, box) for text in donor_text):
+            continue
+        if any(_share_inside(taken, box) >= _PANEL_USE_SHARE for taken in filled):
+            continue
+        for other, other_box, _ in list(iter_shapes(tree)):
+            if other is element or other_box is None or not _inside(other_box, box):
+                continue
+            if tree in other.iterancestors():
+                other.getparent().remove(other)
+        element.getparent().remove(element)
+        removed += 1
+    return removed
+
+
+def _share_inside(inner: Box, outer: Box) -> float:
+    """Какая доля рамки лежит внутри другой."""
+    width = min(inner.right, outer.right) - max(inner.x, outer.x)
+    height = min(inner.bottom, outer.bottom) - max(inner.y, outer.y)
+    if width <= 0 or height <= 0 or inner.area <= 0:
+        return 0.0
+    return width * height / inner.area
 
 
 def _collect_donors(prs, deck: DeckIR) -> dict[int, tuple[object, list]]:

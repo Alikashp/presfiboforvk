@@ -22,6 +22,7 @@ from deckwright.layout.fitter import FitResult, fit_paragraphs, fit_size, split_
 from deckwright.layout.strategy import Strategy, ladder_for_role, role_typical
 from deckwright.layout.text_metrics import FontMetrics, metrics_for_spec
 from deckwright.schemas import (
+    BlockKind,
     Box,
     ChartContent,
     ChartKind,
@@ -84,6 +85,10 @@ _TEXT_FALLBACK: dict[SlotRole, tuple[SlotRole, ...]] = {
     SlotRole.TABLE: (SlotRole.CHART, SlotRole.BODY, SlotRole.BULLETS),
     SlotRole.IMAGE: (SlotRole.CHART,),
 }
+
+
+# Блоки, которые раскладываются по элементам повторителя, по пункту в элемент.
+_SPREAD_KINDS = frozenset({BlockKind.BULLETS, BlockKind.STEPS})
 
 
 class LayoutError(RuntimeError):
@@ -164,25 +169,50 @@ def _seats_all(
     куда не помещается ни одной строки, — не место: так показатель садился в
     рамку высотой меньше строки и пропадал со слайда.
     """
-    free = _usable_slots(pattern, spec.slide_width_emu, spec.slide_height_emu)
-    allowed = max(1, round(len(free) * strategy.slot_fill_target)) if free else 0
-    free = free[:allowed]
+    free = _fill_share(
+        pattern, _usable_slots(pattern, spec.slide_width_emu, spec.slide_height_emu), strategy
+    )
     title = _title_slot(pattern)
     taken = [title.box] if title is not None else []
     for block in plan_slide.blocks:
         if not _block_lines(block):
             continue
         role = strategy.role_for(block)
-        slot = _assign(free, role, taken)
-        if slot is None:
+        seats = _seat(pattern, block, role, free, taken)
+        if seats is None:
             return False
-        ladder = (ladders or {}).get(slot.role) or []
-        if metrics is not None and ladder and role not in _DATA_ROLES:
-            smallest = fit_paragraphs(_block_lines(block), metrics, slot.box, ladder, min(ladder))
-            if not smallest.capacity_lines:
-                return False
-        taken.append(slot.box)
+        for slot, lines in seats:
+            ladder = (ladders or {}).get(slot.role) or []
+            if metrics is not None and ladder and role not in _DATA_ROLES:
+                smallest = fit_paragraphs(lines, metrics, slot.box, ladder, min(ladder))
+                if not smallest.capacity_lines:
+                    return False
+            taken.append(slot.box)
     return True
+
+
+def _spare_cards(
+    pattern: Pattern, spec: TemplateSpec, plan_slide: SlidePlan, strategy: Strategy
+) -> int:
+    """Сколько карточек донора останется без пункта после раскладки списков."""
+    free = _fill_share(
+        pattern, _usable_slots(pattern, spec.slide_width_emu, spec.slide_height_emu), strategy
+    )
+    title = _title_slot(pattern)
+    taken = [title.box] if title is not None else []
+    spare = 0
+    for block in plan_slide.blocks:
+        if not _block_lines(block):
+            continue
+        seats = _seat(pattern, block, strategy.role_for(block), free, taken)
+        if seats is None:
+            continue
+        # Повторитель, по которому разложен список, и его элементы донора.
+        for repeater in pattern.repeaters:
+            if len(seats) > 1 and seats[0][0].id.startswith(f"{repeater.id}_"):
+                spare += max(0, repeater.observed_count - len(seats))
+        taken.extend(slot.box for slot, _ in seats)
+    return spare
 
 
 def _blocks_fit(
@@ -210,9 +240,9 @@ def _blocks_fit(
     """
     if metrics is None or not ladders:
         return True
-    free = _usable_slots(pattern, spec.slide_width_emu, spec.slide_height_emu)
-    allowed = max(1, round(len(free) * strategy.slot_fill_target)) if free else 0
-    free = free[:allowed]
+    free = _fill_share(
+        pattern, _usable_slots(pattern, spec.slide_width_emu, spec.slide_height_emu), strategy
+    )
     title = _title_slot(pattern)
     taken = [title.box] if title is not None else []
     for block in plan_slide.blocks:
@@ -220,11 +250,12 @@ def _blocks_fit(
         if not lines:
             continue
         role = strategy.role_for(block)
-        slot = _assign(free, role, taken)
-        if slot is None:
+        seats = _seat(pattern, block, role, free, taken)
+        if seats is None:
             # Блок без места уходит в запасную полосу — это уже не
             # композиция шаблона, а вынужденная мера.
             return False
+        slot = seats[0][0]
         if role in _DATA_ROLES:
             if not _roomy_for_data(slot.box, spec):
                 return False
@@ -237,12 +268,12 @@ def _blocks_fit(
             else (ladder[len(ladder) // 2] if ladder else 18.0)
         )
         start = strategy.start_size(ladder, declared)
-        fit = fit_paragraphs(lines, metrics, slot.box, ladder, start)
-        if not fit.fits:
+        fits = _fit_seats([(seat.box, text) for seat, text in seats], metrics, ladder, start)
+        if not all(fit.fits for fit in fits):
             return False
-        if typical is not None and fit.size_pt < typical.get(role, 0.0):
+        if typical is not None and min(f.size_pt for f in fits) < typical.get(role, 0.0):
             return False
-        taken.append(slot.box)
+        taken.extend(seat.box for seat, _ in seats)
     return True
 
 
@@ -309,14 +340,18 @@ def pick_pattern(
         ] or candidates
         order = {cls: rank for rank, cls in enumerate(strategy.pattern_preference)}
 
-        def key(pattern: Pattern) -> tuple[bool, bool, int]:
+        def key(pattern: Pattern) -> tuple[bool, bool, int, int]:
             # `avoid` — композиции, которые для этого слайда уже взяли другие
             # варианты. Варианты строятся независимо, и там, где влезающих
             # композиций мало, два из них брали одну и ту же: на `vk_tech`
             # dense и balanced совпали на всех десяти слайдах (A12).
+            # Лишние карточки — после разнообразия: пустую карточку рендер
+            # уберёт, но не ту, что нарисована в самом layout'е, — на
+            # `vk_tech` три пункта ложились в пять пронумерованных карточек.
             return (
                 pattern.id in avoid,
                 pattern.id in used,
+                _spare_cards(pattern, spec, plan_slide, strategy),
                 order.get(pattern.pattern_class, len(order)),
             )
 
@@ -401,25 +436,28 @@ def _usable_slots(pattern: Pattern, slide_w: int, slide_h: int) -> list:
         if s.role in _CONTENT_ROLES and _on_slide(s.box, slide_w, slide_h)
     ]
     for repeater in pattern.repeaters:
-        horizontal = repeater.axis != "vertical"
         for index in range(repeater.max_count):
-            offset = index * repeater.pitch_emu
+            dx, dy = repeater.offset(index)
             expanded = []
             for slot in repeater.item_slots:
                 if slot.role not in _CONTENT_ROLES:
                     continue
-                box = Box(
-                    x=slot.box.x + (offset if horizontal else 0),
-                    y=slot.box.y + (0 if horizontal else offset),
-                    w=slot.box.w,
-                    h=slot.box.h,
-                )
+                box = Box(x=slot.box.x + dx, y=slot.box.y + dy, w=slot.box.w, h=slot.box.h)
                 if not _on_slide(box, slide_w, slide_h):
                     expanded = []
                     break
+                backdrop = (
+                    repeater.member_backdrops[index]
+                    if index < len(repeater.member_backdrops)
+                    else None
+                )
                 expanded.append(
                     slot.model_copy(
-                        update={"id": f"{repeater.id}_{index}_{slot.id}", "box": box}
+                        update={
+                            "id": f"{repeater.id}_{index}_{slot.id}",
+                            "box": box,
+                            "backdrop": backdrop,
+                        }
                     )
                 )
             if not expanded:
@@ -427,6 +465,26 @@ def _usable_slots(pattern: Pattern, slide_w: int, slide_h: int) -> list:
                 break
             slots.extend(expanded)
     return sorted(slots, key=lambda s: (s.box.y, s.box.x))
+
+
+def _fill_share(pattern: Pattern | None, slots: list, strategy: Strategy) -> list:
+    """Места, которые вариант согласен занять.
+
+    Вариант решает, какую долю мест композиции занимать: плотный забивает
+    все, воздушный оставляет воздух. Доля режет одиночные места композиции,
+    но не карточки повторителя: их число задаёт список, а лишние уходят в
+    рендере. Резать и их значило отдавать списку две карточки из четырёх —
+    подписи всех карточек стоят в порядке чтения раньше их текста.
+    """
+    fixed_ids = {slot.id for slot in pattern.slots} if pattern is not None else None
+    fixed = [slot for slot in slots if fixed_ids is None or slot.id in fixed_ids]
+    allowed = max(1, round(len(fixed) * strategy.slot_fill_target)) if fixed else 0
+    kept = {id(slot) for slot in fixed[:allowed]}
+    return [
+        slot
+        for slot in slots
+        if id(slot) in kept or (fixed_ids is not None and slot.id not in fixed_ids)
+    ]
 
 
 def _title_slot(container):
@@ -473,7 +531,9 @@ def _overlaps(a: Box, b: Box) -> bool:
     return smaller > 0 and (width * height) / smaller > _OVERLAP_TOLERANCE
 
 
-def _assign(slots: list, role: SlotRole, taken: list[Box] | None = None) -> object | None:
+def _assign(
+    slots: list, role: SlotRole, taken: list[Box] | None = None, fallback: bool = True
+) -> object | None:
     """Свободный слот нужной роли, иначе — ближайший подходящий.
 
     Точное совпадение роли предпочтительнее, но отказываться от вёрстки из-за
@@ -487,7 +547,7 @@ def _assign(slots: list, role: SlotRole, taken: list[Box] | None = None) -> obje
     колоду.
     """
     taken = taken or []
-    for wanted in (role, *_TEXT_FALLBACK.get(role, ())):
+    for wanted in (role, *(_TEXT_FALLBACK.get(role, ()) if fallback else ())):
         free = [slot for slot in slots if slot.role is wanted]
         clear = [
             slot for slot in free if not any(_overlaps(slot.box, box) for box in taken)
@@ -496,6 +556,96 @@ def _assign(slots: list, role: SlotRole, taken: list[Box] | None = None) -> obje
             slots.remove(clear[0])
             return clear[0]
     return None
+
+
+def _chunks(items: list[str], count: int) -> list[list[str]]:
+    """Пункты подряд на `count` частей, различающихся не больше чем на один."""
+    size, extra = divmod(len(items), count)
+    parts, start = [], 0
+    for index in range(count):
+        end = start + size + (1 if index < extra else 0)
+        parts.append(list(items[start:end]))
+        start = end
+    return parts
+
+
+def _spread(
+    pattern: Pattern | None, block, wanted: SlotRole, free: list, taken: list[Box]
+) -> list[tuple[object, list[str]]] | None:
+    """Список, разложенный по элементам повторителя: пункт в карточку.
+
+    Донор с четырьмя карточками — это четыре места под четыре мысли. Весь
+    список в первой карточке при трёх пустых рядом — главный дефект листов
+    #12: 14 слайдов из 90 на `vk_tech`. Пунктов больше, чем карточек, —
+    они делятся поровну подряд; меньше — лишние карточки уходят в рендере.
+
+    Берутся только элементы, которые есть у донора (`observed_count`): свою
+    подложку и пиктограмму получают лишь они, дорисованная карточка была бы
+    текстом без карточки. Все места повторителя после этого заняты — иначе
+    следующий блок сел бы в четвёртую карточку при пустых второй и третьей.
+    """
+    if pattern is None or block.kind not in _SPREAD_KINDS or block.heading:
+        return None
+    if len(block.items) < 2:
+        return None
+    by_id = {slot.id: slot for slot in free}
+    for repeater in pattern.repeaters:
+        for item_slot in sorted(repeater.item_slots, key=lambda s: -s.box.area):
+            if item_slot.role is not wanted:
+                continue
+            members = []
+            for index in range(repeater.observed_count):
+                slot = by_id.get(f"{repeater.id}_{index}_{item_slot.id}")
+                if slot is None or any(_overlaps(slot.box, box) for box in taken):
+                    break
+                members.append(slot)
+            if len(members) < 2:
+                continue
+            count = min(len(block.items), len(members))
+            prefix = f"{repeater.id}_"
+            free[:] = [slot for slot in free if not slot.id.startswith(prefix)]
+            return list(
+                zip(members[:count], _chunks(list(block.items), count), strict=True)
+            )
+    return None
+
+
+def _seat(
+    pattern: Pattern | None, block, role: SlotRole, free: list, taken: list[Box]
+) -> list[tuple[object, list[str]]] | None:
+    """Места блока и строки для каждого; None — места не нашлось.
+
+    Роли перебираются в порядке предпочтения, и на каждой сначала —
+    повторитель, потом одиночный слот. Не наоборот: на holdout повторитель
+    был только из подписей в кружках, и список, раскладываясь «по
+    повторителю любой роли», уходил в кружки мимо трёх карточек под текст.
+
+    Одна и та же раскладка нужна подбору композиции, расчёту ёмкости и
+    сборке слайда: мерить одно, а собирать другое значит снова получить
+    переполнение, которого подбор не предвидел.
+    """
+    for wanted in (role, *_TEXT_FALLBACK.get(role, ())):
+        spread = _spread(pattern, block, wanted, free, taken)
+        if spread:
+            return spread
+        slot = _assign(free, wanted, taken, fallback=False)
+        if slot is not None:
+            return [(slot, _block_lines(block))]
+    return None
+
+
+def _fit_seats(
+    seats: list[tuple[Box, list[str]]],
+    metrics: FontMetrics,
+    ladder: list[float],
+    start: float,
+) -> list[FitResult]:
+    """Один кегль на все места блока: карточки одного ряда пишутся одинаково."""
+    first = [fit_paragraphs(lines, metrics, box, ladder, start) for box, lines in seats]
+    common = min(fit.size_pt for fit in first)
+    if all(fit.size_pt == common for fit in first):
+        return first
+    return [fit_paragraphs(lines, metrics, box, ladder, common) for box, lines in seats]
 
 
 # ── Цвет и свободная область ─────────────────────────────────────────────────
@@ -569,7 +719,13 @@ def _text_color(
         from_palette = readable_text_color(spec.palette, background, is_dark)
         if from_palette is not None:
             return from_palette
-    return Color(rgb="FFFFFF") if is_dark else Color(rgb="111111")
+    # Ни один цвет шаблона не читается. Из белого и почти чёрного — тот, что
+    # контрастнее на этом фоне: на средне-яркой карточке признак «шаблон
+    # тёмный» выбирал не тот.
+    return max(
+        (Color(rgb="FFFFFF"), Color(rgb="111111")),
+        key=lambda color: color.contrast_ratio(judged),
+    )
 
 
 def _content_area(spec: TemplateSpec, container) -> Box:
@@ -924,10 +1080,7 @@ def build_slide_ir(
             and _on_slide(slot.box, spec.slide_width_emu, spec.slide_height_emu)
         ]
     )
-    # Вариант решает, какую долю мест композиции занимать: плотный забивает
-    # все, воздушный оставляет воздух.
-    allowed = max(1, round(len(free_slots) * strategy.slot_fill_target)) if free_slots else 0
-    free_slots = free_slots[:allowed]
+    free_slots = _fill_share(pattern, free_slots, strategy)
 
     # Сколько блоков уже не нашли себе слота: каждому следующему достаётся
     # своя полоса свободной области, иначе они лягут друг на друга.
@@ -941,14 +1094,14 @@ def build_slide_ir(
         if not lines:
             continue
         role = strategy.role_for(block)
-        slot = _assign(free_slots, role, taken)
-        box = (
-            slot.box
-            if slot is not None
-            else _free_band(spec, container, homeless, bands, taken)
-        )
+        seats = _seat(pattern, block, role, free_slots, taken)
+        slot = seats[0][0] if seats else None
         if slot is None:
+            seats = [(None, lines)]
+            box = _free_band(spec, container, homeless, bands, taken)
             homeless += 1
+        else:
+            box = slot.box
         block_ladder = ladders[slot.role if slot is not None else role]
         declared = (
             slot.style.size_pt
@@ -957,31 +1110,20 @@ def build_slide_ir(
         )
         start = strategy.start_size(block_ladder, declared)
         element_id = f"s{plan_slide.index}_b{position}"
-
-        overflowed = False
-        steps_down = 0
-        capacity, used = 0, 0
-        if metrics is not None:
-            fit = fit_paragraphs(lines, metrics, box, block_ladder, start)
-            size = fit.size_pt
-            steps_down = fit.steps_down
-            overflowed = not fit.fits
-            capacity, used = fit.capacity_lines, fit.lines
-            if overflowed:
-                issues.append(
-                    _overflow_issue(
-                        plan_slide.index, element_id, box, fit, f"блок {block.id!r}"
-                    )
-                )
-        else:
-            size = start
-
-        style = TextStyle(
-            font_family=font_family,
-            size_pt=size,
-            color=_text_color(container, role, is_dark, _under(slot, background), spec),
+        placed = [
+            (seat.box if seat is not None else box, text) for seat, text in seats
+        ]
+        # Цвет — по подложке каждого места: карточки одного ряда бывают
+        # разного цвета.
+        colors = [
+            _text_color(container, role, is_dark, _under(seat, background), spec)
+            for seat, _ in seats
+        ]
+        fits = (
+            _fit_seats(placed, metrics, block_ladder, start) if metrics is not None else []
         )
-        taken.append(box)
+        color = colors[0]
+        taken.extend(seat_box for seat_box, _ in placed)
 
         # Числовой ряд и таблица становятся нативными объектами, а не
         # пересказом строками: ТЗ засчитывает только `c:chart` и `a:tbl`, и
@@ -991,7 +1133,11 @@ def build_slide_ir(
             block,
             role,
             box,
-            style,
+            TextStyle(
+                font_family=font_family,
+                size_pt=fits[0].size_pt if fits else start,
+                color=color,
+            ),
             spec,
             pack,
             background,
@@ -1002,31 +1148,46 @@ def build_slide_ir(
             elements.append(native)
             continue
 
-        elements.append(
-            Element(
-                id=element_id,
-                kind=ElementKind.TEXT,
-                role=slot.role if slot is not None else role,
-                box=box,
-                provenance=provenance,
-                backdrop=_under(slot, None),
-                text=TextContent(
-                    paragraphs=[
-                        Paragraph(text=line, style=style, bullet=len(lines) > 1)
-                        for line in lines
-                    ],
-                    # Переполнение записывается в само представление, а не
-                    # только в находки вёрстки: аудит читает IR и обязан
-                    # видеть то же, что видел фиттер.
-                    scale_steps_down=steps_down,
-                    truncated=overflowed,
-                    # Ёмкость рамки и занятое ею: «сократите текст» без этих
-                    # чисел — совет, который живая модель уже не выполнила.
-                    capacity_lines=capacity,
-                    used_lines=used,
-                ),
+        for number, (seat_box, text) in enumerate(placed):
+            # Блок, разложенный по карточкам, даёт элемент на карточку.
+            seat_id = element_id if len(placed) == 1 else f"{element_id}_{number}"
+            fit = fits[number] if fits else None
+            if fit is not None and not fit.fits:
+                issues.append(
+                    _overflow_issue(
+                        plan_slide.index, seat_id, seat_box, fit, f"блок {block.id!r}"
+                    )
+                )
+            style = TextStyle(
+                font_family=font_family,
+                size_pt=fit.size_pt if fit is not None else start,
+                color=colors[number],
             )
-        )
+            elements.append(
+                Element(
+                    id=seat_id,
+                    kind=ElementKind.TEXT,
+                    role=slot.role if slot is not None else role,
+                    box=seat_box,
+                    provenance=provenance,
+                    backdrop=_under(seats[number][0], None),
+                    text=TextContent(
+                        paragraphs=[
+                            Paragraph(text=line, style=style, bullet=len(text) > 1)
+                            for line in text
+                        ],
+                        # Переполнение записывается в само представление, а не
+                        # только в находки вёрстки: аудит читает IR и обязан
+                        # видеть то же, что видел фиттер.
+                        scale_steps_down=fit.steps_down if fit is not None else 0,
+                        truncated=fit is not None and not fit.fits,
+                        # Ёмкость рамки и занятое ею: «сократите текст» без этих
+                        # чисел — совет, который живая модель уже не выполнила.
+                        capacity_lines=fit.capacity_lines if fit is not None else 0,
+                        used_lines=fit.lines if fit is not None else 0,
+                    ),
+                )
+            )
 
     slide = SlideIR(
         index=plan_slide.index,

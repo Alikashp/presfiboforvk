@@ -107,7 +107,39 @@ class Repeater(BaseModel):
     max_count: int = Field(gt=0)
     pitch_emu: int = Field(gt=0)
     gutter_emu: int = Field(ge=0)
+    # Фактические сдвиги элементов донора от первого, по осям x и y. Шаг —
+    # среднее, а элементы стоят не всегда ровно: на `vk_tech` карточки идут
+    # лесенкой, и текст второй карточки по шагу ложился под неё. У сетки в
+    # несколько рядов шага по одной оси нет вовсе.
+    member_offsets: list[tuple[int, int]] = Field(default_factory=list)
+    # Каждый элемент донора целиком: подложка карточки, плашка и пиктограмма
+    # вместе с текстом. `item_box` снят с текстовой рамки, а карточка шире
+    # неё — на `vk_tech` на 0.17 дюйма с каждой стороны. Без этих рамок
+    # незаполненная карточка не опознавалась своей и оставалась на слайде
+    # пустой подложкой. Рамка у каждого элемента своя: сдвиги, снятые с
+    # текста, у подложек расходятся на сотые доли дюйма, и четвёртая
+    # оставалась.
+    member_frames: list[Box] = Field(default_factory=list)
+    # Подложка под текстом каждого элемента донора. У карточек одного ряда
+    # она бывает разной: на holdout светло-, средне- и тёмно-зелёная, и
+    # цвет текста по первой давал чёрный текст на тёмной третьей.
+    member_backdrops: list[Color | None] = Field(default_factory=list)
     provenance: Provenance
+
+    def offset(self, index: int) -> tuple[int, int]:
+        """Сдвиг элемента с этим номером от первого, по осям x и y.
+
+        Элементы, которые есть у донора, стоят там, где стояли; следующие —
+        по среднему шагу за последним.
+        """
+        if index < len(self.member_offsets):
+            return self.member_offsets[index]
+        last = len(self.member_offsets) - 1
+        base_x, base_y = self.member_offsets[last] if last >= 0 else (0, 0)
+        step = (index - max(last, 0)) * self.pitch_emu
+        if self.axis == "vertical":
+            return base_x, base_y + step
+        return base_x + step, base_y
 
     @model_validator(mode="after")
     def _counts_are_sane(self) -> Repeater:
