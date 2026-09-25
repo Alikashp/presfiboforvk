@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from deckwright.audit.registry import check
@@ -188,6 +189,102 @@ def package(pptx_path: str | Path) -> list[Issue]:
     return found
 
 
+# Имена, которые Office даёт рядам и категориям графика по умолчанию. Это
+# данные шаблона-донора, а не ответ модели.
+_DEFAULT_CHART_NAME = re.compile(r"^(Ряд|Серия|Series|Категория|Category)\s*\d+$", re.I)
+
+
+def donor_data(pptx_path: str | Path, deck: DeckIR, spec=None) -> list[Issue]:
+    """Данные донора, доехавшие до готовой колоды: ложные цифры.
+
+    Рыбный график «Ряд 1/2/3» рядом с нашим и кольцо «10%» — визуализация
+    данных, которых в контент-пакете нет. Детерминированные проверки по IR
+    их не видят: в IR этих фигур нет, они приезжают клонированием донора.
+    Поэтому проверяется собранный файл: у графиков — имена рядов и категорий,
+    у текста — числа-показатели, которых нет в нашем содержании слайда.
+    """
+    from pptx import Presentation
+    from pptx.enum.shapes import MSO_SHAPE_TYPE
+
+    from deckwright.parse.patterns import is_figure_text
+    from deckwright.render.pptx_writer import _same_box, _shape_box_of, _similar_size
+
+    found: list[Issue] = []
+    patterns = {pattern.id: pattern for pattern in getattr(spec, "patterns", [])}
+    presentation = Presentation(str(pptx_path))
+    for slide_ir, slide in zip(deck.slides, presentation.slides, strict=False):
+        pattern = patterns.get(slide_ir.pattern_id)
+        data_boxes = [
+            element.box
+            for element in slide_ir.all_elements()
+            if element.chart is not None or element.table is not None
+        ]
+        for shape in _walk(slide.shapes):
+            if shape.shape_type != MSO_SHAPE_TYPE.PICTURE:
+                continue
+            box = _shape_box_of(shape)
+            # Картинка донора с его числом: кольцо «10%» без числа — всё ещё
+            # чужая доля. И картинка того же размера, что наш график рядом, —
+            # рыбный график дизайнера.
+            if pattern is not None and any(
+                _same_box(box, figure) for figure in pattern.figure_pictures
+            ):
+                found.append(
+                    _issue(
+                        "integrity.donor_data_leftover",
+                        slide_ir.index,
+                        "картинка донора с его числом: визуализация данных, которых нет",
+                    )
+                )
+            elif any(_similar_size(box, data) for data in data_boxes):
+                found.append(
+                    _issue(
+                        "integrity.donor_data_leftover",
+                        slide_ir.index,
+                        "картинка донора размером с наш график: рыбный график рядом с нашим",
+                    )
+                )
+        ours = {
+            paragraph.text.strip()
+            for element in slide_ir.all_elements()
+            if element.text is not None
+            for paragraph in element.text.paragraphs
+        }
+        for shape in _walk(slide.shapes):
+            if getattr(shape, "has_chart", False) and shape.has_chart:
+                plot = shape.chart.plots[0] if shape.chart.plots else None
+                names = [series.name for series in plot.series] if plot else []
+                names += list(plot.categories) if plot else []
+                fish = [name for name in names if _DEFAULT_CHART_NAME.match(str(name))]
+                if fish:
+                    found.append(
+                        _issue(
+                            "integrity.donor_data_leftover",
+                            slide_ir.index,
+                            f"график донора с рыбными данными: {', '.join(map(str, fish[:3]))}",
+                        )
+                    )
+            if shape.has_text_frame:
+                text = shape.text_frame.text.strip()
+                if is_figure_text(text) and text not in ours:
+                    found.append(
+                        _issue(
+                            "integrity.donor_data_leftover",
+                            slide_ir.index,
+                            f"число донора {text!r}: в содержании слайда его нет",
+                        )
+                    )
+    return found
+
+
+def _walk(shapes):
+    """Фигуры слайда вместе с содержимым групп."""
+    for shape in shapes:
+        yield shape
+        if hasattr(shape, "shapes"):
+            yield from _walk(shape.shapes)
+
+
 def figures(plan: DeckPlan, pack) -> list[Issue]:
     """Числа: цитата сверяется с фактом, производное пересчитывается формулой.
 
@@ -223,6 +320,7 @@ def run(
     max_bullets: int,
     max_words: int,
     min_fill: float = MIN_FILL_RATIO,
+    spec=None,
 ) -> list[Issue]:
     found: list[Issue] = []
     for slide in deck.slides:
@@ -232,4 +330,5 @@ def run(
     if pptx_path is not None:
         found.extend(fill_ratio(pptx_path, deck, min_fill))
         found.extend(package(pptx_path))
+        found.extend(donor_data(pptx_path, deck, spec))
     return found

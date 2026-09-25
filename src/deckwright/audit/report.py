@@ -47,6 +47,7 @@ def audit_deck(
             max_bullets=cfg.audit.max_bullets_per_slide,
             max_words=cfg.audit.max_words_per_bullet,
             min_fill=cfg.audit.min_fill_ratio,
+            spec=spec,
         )
     )
 

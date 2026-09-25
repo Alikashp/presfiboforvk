@@ -150,6 +150,11 @@ def _chart_svg(element: Element) -> str:
     gap = width * 0.01
     bar = max(0.5, (width - gap * (columns + 1)) / max(1, columns))
 
+    # Подписи значений сверху тянут место у высоты столбиков.
+    if chart.show_values:
+        plot -= label_size * 1.4
+    top = label_size * 1.4 if chart.show_values else 0.0
+
     bars: list[str] = []
     index = 0
     for category in range(len(chart.categories)):
@@ -157,11 +162,22 @@ def _chart_svg(element: Element) -> str:
             value = series.values[category]
             bar_height = max(0.0, plot * value / peak)
             x = gap + index * (bar + gap)
+            # Тот же выбор, что и в `.pptx`: главные точки — цветом бренда.
+            muted = chart.highlight and category not in chart.highlight and chart.muted_color
+            fill = chart.muted_color.rgb if muted else series.color.rgb
+            y = top + plot - bar_height
             bars.append(
-                f'<rect x="{x:.2f}" y="{plot - bar_height:.2f}" '
-                f'width="{bar:.2f}" height="{bar_height:.2f}" fill="#{series.color.rgb}">'
+                f'<rect x="{x:.2f}" y="{y:.2f}" '
+                f'width="{bar:.2f}" height="{bar_height:.2f}" fill="#{fill}">'
                 f"<title>{_escape(series.name)}: {value:g}</title></rect>"
             )
+            if chart.show_values:
+                unit = f" {chart.unit}" if chart.unit else ""
+                bars.append(
+                    f'<text x="{x + bar / 2:.2f}" y="{y - label_size * 0.4:.2f}" '
+                    f'font-size="{label_size:.2f}" font-weight="bold" text-anchor="middle" '
+                    f'fill="#{fill}">{value:g}{_escape(unit)}</text>'
+                )
             index += 1
 
     label_style = chart.label_style

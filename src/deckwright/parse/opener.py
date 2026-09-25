@@ -23,7 +23,8 @@ from pptx.presentation import Presentation as PresentationObject
 from deckwright.parse import tokens as tokens_mod
 from deckwright.parse.bookends import bookend_pattern, find_bookends
 from deckwright.parse.fonts import extract_embedded_fonts
-from deckwright.parse.patterns import mine_slide
+from deckwright.parse.geometry import iter_shapes
+from deckwright.parse.patterns import is_figure_text, mine_slide
 from deckwright.parse.recurring import find_recurring
 from deckwright.parse.semantics import classified
 from deckwright.schemas import (
@@ -426,6 +427,7 @@ def _parse(path: Path, font_dir: Path | None) -> TemplateSpec:
                         )
                         for slot in pattern.slots
                     ],
+                    "figure_pictures": _figure_pictures(tree),
                     "repeaters": [
                         repeater.model_copy(
                             update={
@@ -522,6 +524,34 @@ def _parse(path: Path, font_dir: Path | None) -> TemplateSpec:
         recurring=recurring,
         warnings=warnings,
     )
+
+
+def _figure_pictures(tree) -> list[Box]:
+    """Картинки слайда, на которых стоит число-показатель шаблона."""
+    shapes = [(element, box) for element, box, _ in iter_shapes(tree) if box is not None]
+    def own_text(element) -> str:
+        # Только свой `txBody`: полный обход захватывает и запасные ветки
+        # `AlternateContent`, и «10%» читался как «10%10%10%».
+        body = element.find(f"{{{P_NS}}}txBody")
+        if body is None:
+            return ""
+        return "".join(node.text or "" for node in body.iter(f"{{{A_NS}}}t"))
+
+    numbers = [
+        box
+        for element, box in shapes
+        if etree.QName(element).localname == "sp" and is_figure_text(own_text(element))
+    ]
+    pictures = [box for element, box in shapes if etree.QName(element).localname == "pic"]
+    figures = [box for box in pictures if any(_covers_most(n, box) for n in numbers)]
+    # И части той же фигуры: дуга кольца — отдельная картинка внутри него.
+    return [box for box in pictures if any(_covers_most(box, f) for f in figures)]
+
+
+def _covers_most(inner: Box, outer: Box) -> bool:
+    width = min(inner.right, outer.right) - max(inner.x, outer.x)
+    height = min(inner.bottom, outer.bottom) - max(inner.y, outer.y)
+    return width > 0 and height > 0 and width * height >= 0.9 * inner.area
 
 
 def _overlap(a: Box, b: Box) -> bool:

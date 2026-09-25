@@ -51,7 +51,7 @@ from deckwright.schemas import (
     TextStyle,
     readable_text_color,
 )
-from deckwright.visuals.charts import series_from_pack
+from deckwright.visuals.charts import series_from_pack, series_unit
 
 # Намерения, которым хватает одного заголовка.
 _BARE_INTENTS = frozenset({SlideIntent.TITLE, SlideIntent.SECTION, SlideIntent.CLOSING})
@@ -180,6 +180,11 @@ def _seats_all(
         role = strategy.role_for(block)
         seats = _seat(pattern, block, role, free, taken)
         if seats is None:
+            return False
+        # Место под график или таблицу — не меньше четверти слайда и в
+        # запасном пути: иначе график садился в иконку 0.24 дюйма
+        # (`vk_workspace`, airy, слайд 8) и пропадал со слайда.
+        if role in _DATA_ROLES and not _roomy_for_data(seats[0][0].box, spec):
             return False
         for slot, lines in seats:
             ladder = (ladders or {}).get(slot.role) or []
@@ -340,7 +345,12 @@ def pick_pattern(
         ] or candidates
         order = {cls: rank for rank, cls in enumerate(strategy.pattern_preference)}
 
-        def key(pattern: Pattern) -> tuple[bool, bool, int, int]:
+        has_data = any(
+            block.kind in (BlockKind.SERIES, BlockKind.KPI, BlockKind.TABLE)
+            for block in plan_slide.blocks
+        )
+
+        def key(pattern: Pattern) -> tuple[bool, bool, bool, int, int]:
             # `avoid` — композиции, которые для этого слайда уже взяли другие
             # варианты. Варианты строятся независимо, и там, где влезающих
             # композиций мало, два из них брали одну и ту же: на `vk_tech`
@@ -349,6 +359,10 @@ def pick_pattern(
             # уберёт, но не ту, что нарисована в самом layout'е, — на
             # `vk_tech` три пункта ложились в пять пронумерованных карточек.
             return (
+                # Композиция с картинками-показателями донора (кольца «10%») —
+                # макет под данные: слайду без данных картинки уйдут, и он
+                # останется с тремя строками посреди пустоты.
+                bool(pattern.figure_pictures) and not has_data,
                 pattern.id in avoid,
                 pattern.id in used,
                 _spare_cards(pattern, spec, plan_slide, strategy),
@@ -396,8 +410,14 @@ def pick_pattern(
         for pattern in (matches or []) + relaxed
         if _seats_all(pattern, spec, plan_slide, strategy, metrics, ladders)
     ]
-    if seated:
-        return best_of(seated)
+    # И из них — те, где влезает хотя бы заголовок.
+    titled = [
+        pattern
+        for pattern in seated
+        if _title_fits(pattern, plan_slide, strategy, metrics, title_ladder)
+    ]
+    if titled or seated:
+        return best_of(titled or seated)
     if matches:
         return best_of(matches)
     if not relaxed:
@@ -813,6 +833,7 @@ def _data_element(
     background: Color | None,
     is_dark: bool,
     roomy: Box,
+    plan_slide: SlidePlan | None = None,
 ) -> Element | None:
     """Блок плана как нативный график или таблица, если это возможно.
 
@@ -823,11 +844,23 @@ def _data_element(
     Растр здесь невозможен по построению: и `c:chart`, и `a:tbl` — нативные
     объекты, которые человек может открыть и поправить.
     """
-    palette = _visible_palette(spec, background, is_dark)
-
     if role is SlotRole.CHART and block.series_ids and pack is not None:
-        categories, series = series_from_pack(block.series_ids, pack, palette)
+        # В поля шаблона: место под фото бывает во весь слайд, от края до
+        # края, а график у края выглядит обрезанным.
+        inner = _within_margins(box, roomy)
+        if inner is not None and _roomy_for_data(inner, spec):
+            box = inner
+        brand = _brand_colors(spec, background, is_dark)
+        categories, series = series_from_pack(block.series_ids, pack, brand)
         if categories and series:
+            # Кегль подписей — текстовый, а не кегль слота донора: на
+            # `vk_workspace` график сел в место под «ххх%» кеглем 80, и его
+            # подписи легли вертикальной кашей.
+            body = role_typical(spec, SlotRole.BODY) or style.size_pt
+            label = style.model_copy(
+                update={"size_pt": max(CHART_MIN_PT, min(style.size_pt, body))}
+            )
+            single = len(series) == 1
             return Element(
                 id=element_id,
                 kind=ElementKind.CHART,
@@ -839,18 +872,43 @@ def _data_element(
                     categories=categories,
                     series=series,
                     has_legend=len(series) > 1,
-                    label_style=style,
+                    unit=series_unit(block.series_ids, pack),
+                    label_style=label,
+                    highlight=_key_points(series[0].values, plan_slide, pack) if single else [],
+                    muted_color=_muted(series[0].color, background, is_dark) if single else None,
+                    show_values=single,
                 ),
             )
 
     if role is SlotRole.TABLE:
-        table = _table_content(block, pack, style)
+        body = role_typical(spec, SlotRole.BODY) or style.size_pt
+        cell = style.model_copy(update={"size_pt": max(CHART_MIN_PT, min(style.size_pt, body))})
+        brand = _brand_colors(spec, background, is_dark)
+        table = _table_content(block, pack, cell)
         if table is not None:
+            fill = brand[0]
+            header = cell.model_copy(
+                update={"color": readable_text_color_on(fill), "bold": True}
+            )
+            values = [_number(row[-1]) for row in table.rows]
+            keys = (
+                _key_points(values, plan_slide, pack)
+                if block.series_ids and all(v is not None for v in values)
+                else []
+            )
+            table = table.model_copy(
+                update={
+                    "header_style": header,
+                    "header_fill": fill,
+                    "accent": fill,
+                    "highlight_rows": keys,
+                }
+            )
             return Element(
                 id=element_id,
                 kind=ElementKind.TABLE,
                 role=SlotRole.TABLE,
-                box=_table_box(table, style, box, roomy),
+                box=_table_box(table, cell, box, roomy),
                 provenance=Provenance(kind=SourceKind.DERIVED, ref=block.id),
                 table=table,
             )
@@ -880,6 +938,95 @@ def _table_box(table: TableContent, style: TextStyle, slot: Box, roomy: Box) -> 
         w=max(roomy.w, needed_w) if roomy.w >= needed_w else roomy.w,
         h=min(roomy.h, max(needed_h, roomy.h)) if needed_h <= roomy.h else roomy.h,
     )
+
+
+# Мельче этого подписи графика не читаются с проектора.
+CHART_MIN_PT = 10.0
+
+# Порог контраста для заливок графика: нетекстовая графика по WCAG — 3:1.
+# Порог текста 4.5 отсекал фирменный синий на белом (4.2), и столбики
+# `vk_education` красились чёрным — первым цветом палитры.
+GRAPHIC_CONTRAST = 3.0
+
+
+def _brand_colors(
+    spec: TemplateSpec, background: Color | None, is_dark: bool
+) -> list[Color]:
+    """Цвета шаблона для заливок графика: сначала акцентные, видимые на фоне.
+
+    Акцент — самый насыщенный из употребляемых цветов: серый и чёрный — цвета
+    текста и фона, а не бренда.
+    """
+    judged = background or (Color(rgb="000000") if is_dark else Color(rgb="FFFFFF"))
+    visible = [
+        token.color
+        for token in spec.palette
+        if token.color.contrast_ratio(judged) >= GRAPHIC_CONTRAST
+    ]
+    if not visible:
+        return _visible_palette(spec, background, is_dark)
+    return sorted(visible, key=lambda color: -_saturation(color))
+
+
+def _saturation(color: Color) -> float:
+    red, green, blue = (int(color.rgb[i : i + 2], 16) / 255 for i in (0, 2, 4))
+    high, low = max(red, green, blue), min(red, green, blue)
+    return 0.0 if high == 0 else (high - low) / high
+
+
+def _muted(color: Color, background: Color | None, is_dark: bool) -> Color:
+    """Тот же цвет, наполовину растворённый в фоне: второстепенные точки."""
+    base = background or (Color(rgb="000000") if is_dark else Color(rgb="FFFFFF"))
+    channels = []
+    for i in (0, 2, 4):
+        top, bottom = int(color.rgb[i : i + 2], 16), int(base.rgb[i : i + 2], 16)
+        channels.append(f"{round(0.35 * top + 0.65 * bottom):02X}")
+    return Color(rgb="".join(channels))
+
+
+def _key_points(values: list[float], plan_slide: SlidePlan | None, pack) -> list[int]:
+    """Точки ряда, которые несут вывод слайда.
+
+    Это точки, чьё значение слайд объявил в своих числах (`figures`) ссылкой
+    на факт пакета: «от 42 до 9 минут» — это две точки, 42 и 9. Разбирать
+    текст заголовка не нужно — числа слайда уже структурированы. Не объявил
+    ничего — главная последняя точка: итог, к которому пришёл ряд.
+    """
+    facts = {fact.id: fact.value for fact in getattr(pack, "facts", []) if fact.value is not None}
+    declared = {
+        facts[fact_id]
+        for figure in (plan_slide.figures if plan_slide is not None else [])
+        for fact_id in figure.fact_ids
+        if fact_id in facts
+    }
+    chosen = [index for index, value in enumerate(values) if value in declared]
+    return chosen or [len(values) - 1]
+
+
+def _within_margins(box: Box, area: Box) -> Box | None:
+    """Пересечение рамки с областью содержания; None — если его нет."""
+    x, y = max(box.x, area.x), max(box.y, area.y)
+    right, bottom = min(box.right, area.right), min(box.bottom, area.bottom)
+    if right <= x or bottom <= y:
+        return None
+    return Box(x=x, y=y, w=right - x, h=bottom - y)
+
+
+def readable_text_color_on(fill: Color) -> Color:
+    """Белый или почти чёрный — что контрастнее на заливке."""
+    return max(
+        (Color(rgb="FFFFFF"), Color(rgb="111111")),
+        key=lambda color: color.contrast_ratio(fill),
+    )
+
+
+def _number(text: str) -> float | None:
+    """Число в начале ячейки, которую мы сами составили из ряда: «42 мин»."""
+    head = text.split(" ")[0]
+    try:
+        return float(head)
+    except ValueError:
+        return None
 
 
 def _visible_palette(
@@ -925,7 +1072,13 @@ def _table_content(block, pack, style: TextStyle) -> TableContent | None:
     return TableContent(
         header=["", *[item.name for item in chosen]],
         rows=[
-            [label, *[f"{item.values[row]:g}" for item in chosen]]
+            [
+                label,
+                *[
+                    f"{item.values[row]:g} {item.unit}".strip()
+                    for item in chosen
+                ],
+            ]
             for row, label in enumerate(categories)
         ],
         header_style=style,
@@ -1231,6 +1384,7 @@ def build_slide_ir(
             background,
             is_dark,
             _content_area(spec, container),
+            plan_slide,
         )
         if native is not None:
             elements.append(native)

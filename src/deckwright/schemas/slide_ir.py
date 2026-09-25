@@ -90,6 +90,12 @@ class ChartContent(BaseModel):
     axis_title_y: str = ""
     unit: str = ""
     label_style: TextStyle | None = None
+    # Точки, которые несут вывод слайда: они — цветом бренда, остальные —
+    # приглушённым. Пусто — все точки одним цветом.
+    highlight: list[int] = Field(default_factory=list)
+    muted_color: Color | None = None
+    # Подписи значений на точках: с ними ось значений и сетка не нужны.
+    show_values: bool = False
 
     @model_validator(mode="after")
     def _series_match_categories(self) -> ChartContent:
@@ -111,6 +117,12 @@ class TableContent(BaseModel):
     rows: list[list[str]] = Field(default_factory=list)
     header_style: TextStyle | None = None
     cell_style: TextStyle | None = None
+    # Заливка шапки — акцент бренда, а не первый цвет палитры (на
+    # `vk_education` это чёрный: пустая чёрная шапка).
+    header_fill: Color | None = None
+    # Строки, которые несут вывод слайда: набираются цветом бренда.
+    highlight_rows: list[int] = Field(default_factory=list)
+    accent: Color | None = None
 
     @model_validator(mode="after")
     def _rows_are_rectangular(self) -> TableContent:

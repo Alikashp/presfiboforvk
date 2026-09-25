@@ -33,6 +33,7 @@ from pptx.enum.text import PP_ALIGN
 from pptx.util import Emu, Pt
 
 from deckwright.parse.geometry import iter_shapes
+from deckwright.parse.patterns import is_figure_text
 from deckwright.render.clone import clone_shape, purge_slides
 from deckwright.schemas import (
     Align,
@@ -41,6 +42,7 @@ from deckwright.schemas import (
     DeckIR,
     Element,
     ElementKind,
+    SlotRole,
     TemplateSpec,
     TextStyle,
 )
@@ -363,6 +365,10 @@ def render_deck(
         candidates = _text_shapes(slide)
         # Где у донора был текст — до того, как его заменят или сотрут.
         donor_text = [box for box, shape in candidates if shape.text_frame.text.strip()]
+        # Где у донора стояли его числа: «10%», «ххх%», «7».
+        donor_numbers = [
+            (box, shape) for box, shape in candidates if is_figure_text(shape.text_frame.text)
+        ]
         filled: list[Box] = []
         for element in slide_ir.elements:
             used = _render_element(slide, element, candidates, accent, slide_ir)
@@ -379,6 +385,8 @@ def render_deck(
             slide, patterns.get(slide_ir.pattern_id), filled, deck
         )
         _drop_unfilled_data_frames(slide, filled)
+        _drop_donor_figures(slide, donor_numbers, filled)
+        _drop_sibling_figures(slide, patterns.get(slide_ir.pattern_id), slide_ir)
         _drop_emptied_panels(slide, donor_text, filled, deck)
 
         _drop_unfilled_placeholders(slide, filled)
@@ -610,6 +618,84 @@ def _share_inside(inner: Box, outer: Box) -> float:
     if width <= 0 or height <= 0 or inner.area <= 0:
         return 0.0
     return width * height / inner.area
+
+
+def _drop_donor_figures(
+    slide, numbers: list[tuple[Box, object]], filled: list[Box]
+) -> int:
+    """Убирает картинки донора, на которых стоит его число, а наших данных нет.
+
+    Кольцо с подписью «10%» на `vk_tech` — это визуализация данных, которых
+    в контент-пакете нет: число мы стираем, а картинка с чужой долей
+    оставалась и выдавала себя за наши данные. Такая фигура либо заполняется
+    нашими данными, либо уходит — вместе с числом.
+    """
+    tree = slide.shapes._spTree
+    removed = 0
+    for box, shape in numbers:
+        if any(_same_box(box, taken) for taken in filled):
+            continue
+        under = 0
+        pictures = [
+            (element, pic_box)
+            for element, pic_box, _ in iter_shapes(tree)
+            if pic_box is not None and etree.QName(element).localname == "pic"
+        ]
+        figures = [pic_box for _, pic_box in pictures if _inside(box, pic_box)]
+        for element, pic_box in pictures:
+            # Кольцо бывает собрано из нескольких картинок: дуга лежит
+            # внутри подложки кольца, и уходит вместе с ней.
+            if not any(_inside(pic_box, figure) for figure in figures):
+                continue
+            if tree not in element.iterancestors():
+                continue
+            element.getparent().remove(element)
+            under += 1
+        if under and shape._element.getparent() is not None:
+            shape._element.getparent().remove(shape._element)
+        removed += under
+    return removed
+
+
+def _drop_sibling_figures(slide, pattern, slide_ir) -> int:
+    """Убирает картинки донора того же размера, что и место под наш график.
+
+    Рыбный график дизайнера бывает картинкой: на `vk_education` два графика
+    «Ряд 1/2/3» стоят рядом, наш встаёт на место одного, второй оставался.
+    Картинка того же размера, что и место графика, — такой же пример данных,
+    а не декор.
+    """
+    if pattern is None:
+        return 0
+    charts = [
+        element.box
+        for element in slide_ir.elements
+        if element.kind in (ElementKind.CHART, ElementKind.TABLE)
+    ]
+    if not charts:
+        return 0
+    places = [
+        slot.box
+        for slot in pattern.slots
+        if slot.role in (SlotRole.IMAGE, SlotRole.CHART, SlotRole.TABLE)
+    ]
+    taken = [place for place in places if any(_same_box(place, box) for box in charts)]
+    tree = slide.shapes._spTree
+    removed = 0
+    for element, box, _ in list(iter_shapes(tree)):
+        if box is None or etree.QName(element).localname != "pic":
+            continue
+        if tree not in element.iterancestors():
+            continue
+        if any(_similar_size(box, place) for place in taken):
+            element.getparent().remove(element)
+            removed += 1
+    return removed
+
+
+def _similar_size(a: Box, b: Box) -> bool:
+    """Размеры рамок совпадают с точностью до 15 %."""
+    return abs(a.w - b.w) <= 0.15 * b.w and abs(a.h - b.h) <= 0.15 * b.h
 
 
 def _collect_donors(prs, deck: DeckIR) -> dict[int, tuple[object, list]]:
