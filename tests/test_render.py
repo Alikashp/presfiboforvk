@@ -258,3 +258,49 @@ def test_text_inside_a_group_is_filled_or_cleared():
 
     found = [shape for _, shape in _text_shapes(slide)]
     assert any(shape.shape_id == inner.shape_id for shape in found)
+
+
+def test_card_left_without_content_goes_away_whole():
+    """Карточка донора, в которую ничего не положили, уходит с подложкой.
+
+    Текст донора стирается, а подложка оставалась: пустые карточки, кнопки
+    и серые панели — 41 слайд из 90 на листах #12. Занятая карточка и
+    декор, на котором у донора текста не было, остаются.
+    """
+    from types import SimpleNamespace
+
+    from pptx.dml.color import RGBColor
+    from pptx.util import Emu
+
+    from deckwright.render.pptx_writer import _drop_emptied_panels
+    from deckwright.schemas import Box
+
+    presentation = Presentation()
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+    inch = 914400
+
+    def card(x):
+        shape = slide.shapes.add_shape(1, Emu(x), Emu(inch), Emu(2 * inch), Emu(2 * inch))
+        shape.fill.solid()
+        shape.fill.fore_color.rgb = RGBColor(0xEE, 0xEE, 0xEE)
+        return shape
+
+    used, empty, decor = card(inch), card(4 * inch), card(7 * inch)
+    ours = slide.shapes.add_textbox(Emu(inch + 10), Emu(inch + 10), Emu(inch), Emu(inch))
+    icon = slide.shapes.add_shape(1, Emu(4 * inch + 10), Emu(inch + 10), Emu(inch // 4),
+                                  Emu(inch // 4))
+    donor_text = [
+        Box(x=inch + 10, y=inch + 10, w=inch, h=inch),
+        Box(x=4 * inch + 20, y=inch + 20, w=inch, h=inch),
+    ]
+    filled = [Box(x=inch + 10, y=inch + 10, w=inch, h=inch)]
+    deck = SimpleNamespace(slide_width_emu=12 * inch, slide_height_emu=7 * inch)
+
+    removed = _drop_emptied_panels(slide, donor_text, filled, deck)
+
+    left = {shape.shape_id for shape in slide.shapes}
+    assert empty.shape_id not in left, "пустая карточка осталась"
+    assert icon.shape_id not in left, "пиктограмма пустой карточки осталась"
+    assert used.shape_id in left and ours.shape_id in left, "убрана занятая карточка"
+    assert decor.shape_id in left, "убран декор, на котором текста не было"
+    assert removed == 1

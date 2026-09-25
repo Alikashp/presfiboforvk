@@ -417,12 +417,29 @@ def _parse(path: Path, font_dir: Path | None) -> TemplateSpec:
                         slot.model_copy(
                             update={
                                 "backdrop": tokens_mod.local_backdrop(
-                                    tree, slot.box, theme, primary_map
+                                    tree, slot.box, theme, primary_map, effective
                                 )
                             }
                         )
                         for slot in pattern.slots
-                    ]
+                    ],
+                    "repeaters": [
+                        repeater.model_copy(
+                            update={
+                                "member_backdrops": [
+                                    tokens_mod.local_backdrop(
+                                        tree,
+                                        _text_of_member(repeater, dx, dy),
+                                        theme,
+                                        primary_map,
+                                        effective,
+                                    )
+                                    for dx, dy in repeater.member_offsets
+                                ]
+                            }
+                        )
+                        for repeater in pattern.repeaters
+                    ],
                 }
             )
             patterns.append(classified(pattern, slide_w, slide_h))
@@ -460,6 +477,20 @@ def _parse(path: Path, font_dir: Path | None) -> TemplateSpec:
         recurring=recurring,
         warnings=warnings,
     )
+
+
+def _text_of_member(repeater, dx: int, dy: int) -> Box:
+    """Главная текстовая рамка элемента повторителя с этим сдвигом.
+
+    Самая крупная, а не объединение всех: номер в кружке над карточкой
+    выходит за её край, и по объединению карточка не находилась подложкой.
+    """
+    main = max(
+        (slot.box for slot in repeater.item_slots),
+        key=lambda box: box.area,
+        default=repeater.item_box,
+    )
+    return Box(x=main.x + dx, y=main.y + dy, w=main.w, h=main.h)
 
 
 def _parser_fingerprint() -> str:

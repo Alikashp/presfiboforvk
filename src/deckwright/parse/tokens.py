@@ -18,6 +18,7 @@
 
 from __future__ import annotations
 
+import colorsys
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 
@@ -110,18 +111,61 @@ def color_map(master_element: etree._Element) -> dict[str, str]:
 def resolve_color(
     node: etree._Element, theme: dict[str, str], clr_map: dict[str, str]
 ) -> Color | None:
-    """Первый цвет внутри узла, приведённый к RGB."""
+    """Первый цвет внутри узла, приведённый к RGB.
+
+    С модификаторами яркости: `accent4` с `lumMod 50%` — это тёмно-зелёная
+    карточка holdout, а без модификатора выходил бирюзовый, по которому
+    чёрный текст проходил порог контраста и садился на тёмное.
+    """
     srgb = node.find(f".//{{{A_NS}}}srgbClr")
     if srgb is not None and srgb.get("val"):
-        return Color(rgb=srgb.get("val"))
+        return _modified(srgb.get("val"), srgb, None)
     scheme = node.find(f".//{{{A_NS}}}schemeClr")
     if scheme is not None and scheme.get("val"):
         name = scheme.get("val")
         slot = clr_map.get(name, name)
         value = theme.get(slot)
         if value:
-            return Color(rgb=value, scheme=slot)
+            return _modified(value, scheme, slot)
     return None
+
+
+_LUMINANCE_MODS = ("lumMod", "lumOff", "shade", "tint")
+
+
+def _modified(rgb: str, node: etree._Element, scheme: str | None) -> Color:
+    """Цвет с модификаторами OOXML: яркость (`lumMod`, `lumOff`, `shade`,
+    `tint`) и прозрачность (`alpha`).
+
+    Изменённый цвет теряет ссылку на тему: иначе рендер записал бы цвет
+    темы без модификатора.
+    """
+    alpha = next(
+        (
+            int(child.get("val", "100000")) / 100_000
+            for child in node
+            if etree.QName(child).localname == "alpha"
+        ),
+        1.0,
+    )
+    mods = {
+        etree.QName(child).localname: int(child.get("val", "100000")) / 100_000
+        for child in node
+        if etree.QName(child).localname in _LUMINANCE_MODS
+    }
+    if not mods:
+        return Color(rgb=rgb, scheme=scheme, alpha=alpha)
+    red, green, blue = (int(rgb[i : i + 2], 16) / 255 for i in (0, 2, 4))
+    if "shade" in mods:
+        red, green, blue = (c * mods["shade"] for c in (red, green, blue))
+    if "tint" in mods:
+        red, green, blue = (1 - (1 - c) * mods["tint"] for c in (red, green, blue))
+    if "lumMod" in mods or "lumOff" in mods:
+        hue, light, sat = colorsys.rgb_to_hls(red, green, blue)
+        light = light * mods.get("lumMod", 1.0) + mods.get("lumOff", 0.0)
+        red, green, blue = colorsys.hls_to_rgb(hue, min(1.0, max(0.0, light)), sat)
+    value = "".join(f"{round(min(1.0, max(0.0, c)) * 255):02X}" for c in (red, green, blue))
+    return Color(rgb=value, alpha=alpha)
 
 
 def backdrop_color(
@@ -169,15 +213,22 @@ def local_backdrop(
     box: Box,
     theme: dict[str, str],
     clr_map: dict[str, str],
+    base: Color | None = None,
 ) -> Color | None:
-    """Цвет самой тесной залитой фигуры, внутри которой лежит рамка.
+    """Цвет, который виден под рамкой: залитые фигуры под ней поверх фона.
 
     Берётся заливка фигуры (`p:spPr/a:solidFill`), а не цвет текста в ней.
-    Самая тесная — потому что ближе всего к тексту лежит карточка, а не
-    подложка слайда под ней. Картинку и градиент так не распознать: это
-    задача растра, здесь — только сплошные заливки.
+    Ближе всего к тексту лежит самая тесная фигура — карточка, а не подложка
+    слайда под ней; непрозрачная, она и есть ответ. Полупрозрачная — нет:
+    карточка `vk_workspace` — это `#0077FF` с прозрачностью 70% на чёрном,
+    то есть тёмно-синяя, и по ярко-синему под неё выбирался тёмный текст.
+    Такие заливки накладываются по порядку, от самой крупной фигуры к самой
+    тесной, поверх `base` — фона слайда. Фон неизвестен — неизвестен и цвет.
+
+    Картинку и градиент так не распознать: это задача растра, здесь —
+    только сплошные заливки.
     """
-    best: tuple[int, Color] | None = None
+    layers: list[tuple[int, Color]] = []
     for element, shape_box, _ in iter_shapes(container):
         if shape_box is None or shape_box.area <= 0:
             continue
@@ -189,9 +240,26 @@ def local_backdrop(
         if fill is None:
             continue
         color = resolve_color(fill, theme, clr_map)
-        if color is not None and (best is None or shape_box.area < best[0]):
-            best = (shape_box.area, color)
-    return best[1] if best else None
+        if color is not None:
+            layers.append((shape_box.area, color))
+    if not layers:
+        return None
+    seen = base
+    for _, color in sorted(layers, key=lambda layer: -layer[0]):
+        if color.alpha >= 1.0:
+            seen = color
+        elif seen is not None:
+            seen = _over(color, seen)
+    return seen
+
+
+def _over(top: Color, bottom: Color) -> Color:
+    """Полупрозрачный цвет поверх непрозрачного."""
+    channels = []
+    for i in (0, 2, 4):
+        upper, lower = int(top.rgb[i : i + 2], 16), int(bottom.rgb[i : i + 2], 16)
+        channels.append(f"{round(top.alpha * upper + (1 - top.alpha) * lower):02X}")
+    return Color(rgb="".join(channels))
 
 
 def _collect_colors(

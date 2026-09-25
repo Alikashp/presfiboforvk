@@ -1,0 +1,315 @@
+{
+  "title": "Платформа наблюдаемости для инженерных команд",
+  "subtitle": "Сокращение времени обнаружения инцидентов и упрощение стека мониторинга",
+  "purpose": "product",
+  "language": "ru",
+  "slides": [
+    {
+      "index": 1,
+      "intent": "title",
+      "takeaway_title": "Единая платформа наблюдаемости",
+      "subtitle": "Пилот для инженерных команд",
+      "blocks": [
+        {
+          "id": "b1",
+          "kind": "paragraph",
+          "heading": "",
+          "items": [
+            "Презентация результатов пилотного внедрения платформы наблюдаемости. Цель: демонстрация эффективности решения для технических руководителей и получение согласования на масштабирование."
+          ],
+          "series_ids": [],
+          "fact_ids": [],
+          "quote_id": null,
+          "image_prompt": "",
+          "table": null
+        }
+      ],
+      "speaker_notes": "",
+      "figures": []
+    },
+    {
+      "index": 2,
+      "intent": "agenda",
+      "takeaway_title": "Структура презентации",
+      "subtitle": "План выступления",
+      "blocks": [
+        {
+          "id": "b2",
+          "kind": "steps",
+          "heading": "",
+          "items": [
+            "1. Текущие проблемы: фрагментация инструментов и долгий поиск причин.",
+            "2. Решение: единая платформа для всех типов данных.",
+            "3. Доказательства: результаты пилота и динамика метрик.",
+            "4. Следующие шаги: план внедрения и запрос на пилот."
+          ],
+          "series_ids": [],
+          "fact_ids": [],
+          "quote_id": null,
+          "image_prompt": "",
+          "table": null
+        }
+      ],
+      "speaker_notes": "",
+      "figures": []
+    },
+    {
+      "index": 3,
+      "intent": "problem",
+      "takeaway_title": "Команды используют 4 системы мониторинга",
+      "subtitle": "Фрагментация стека",
+      "blocks": [
+        {
+          "id": "b3",
+          "kind": "bullets",
+          "heading": "",
+          "items": [
+            "Инженеры переключаются между разными дашбордами.",
+            "Дублирование функциональности и лицензий.",
+            "Отсутствие единого контекста при расследовании."
+          ],
+          "series_ids": [],
+          "fact_ids": [],
+          "quote_id": null,
+          "image_prompt": "",
+          "table": null
+        }
+      ],
+      "speaker_notes": "",
+      "figures": [
+        {
+          "text": "4",
+          "kind": "cited",
+          "fact_ids": [
+            "f2"
+          ],
+          "formula": ""
+        }
+      ]
+    },
+    {
+      "index": 4,
+      "intent": "problem",
+      "takeaway_title": "Обнаружение инцидента занимает 42 минуты",
+      "subtitle": "Высокий MTTD",
+      "blocks": [
+        {
+          "id": "b4",
+          "kind": "bullets",
+          "heading": "",
+          "items": [
+            "Долгий поиск корневой причины в разрозненных данных.",
+            "Рост времени простоя сервисов для бизнеса.",
+            "Перегрузка команд ложными срабатываниями."
+          ],
+          "series_ids": [],
+          "fact_ids": [],
+          "quote_id": null,
+          "image_prompt": "",
+          "table": null
+        }
+      ],
+      "speaker_notes": "",
+      "figures": [
+        {
+          "text": "42",
+          "kind": "cited",
+          "fact_ids": [
+            "f1"
+          ],
+          "formula": ""
+        }
+      ]
+    },
+    {
+      "index": 5,
+      "intent": "solution",
+      "takeaway_title": "Единая платформа объединяет логи, метрики и трейсы",
+      "subtitle": "Архитектура решения",
+      "blocks": [
+        {
+          "id": "b5",
+          "kind": "bullets",
+          "heading": "",
+          "items": [
+            "Сбор всех данных в едином хранилище.",
+            "Корреляция событий без переключения контекста.",
+            "Снижение количества инструментов до одного."
+          ],
+          "series_ids": [],
+          "fact_ids": [],
+          "quote_id": null,
+          "image_prompt": "",
+          "table": null
+        }
+      ],
+      "speaker_notes": "",
+      "figures": []
+    },
+    {
+      "index": 6,
+      "intent": "evidence",
+      "takeaway_title": "Пилот сократил время обнаружения до 9 минут",
+      "subtitle": "Результаты в двух командах",
+      "blocks": [
+        {
+          "id": "b6",
+          "kind": "bullets",
+          "heading": "",
+          "items": [
+            "Значительное ускорение реакции на инциденты.",
+            "Повышение уверенности инженеров в диагностике.",
+            "Снижение нагрузки на поддержку первого уровня."
+          ],
+          "series_ids": [],
+          "fact_ids": [],
+          "quote_id": null,
+          "image_prompt": "",
+          "table": null
+        }
+      ],
+      "speaker_notes": "",
+      "figures": [
+        {
+          "text": "9",
+          "kind": "cited",
+          "fact_ids": [
+            "f3"
+          ],
+          "formula": ""
+        }
+      ]
+    },
+    {
+      "index": 7,
+      "intent": "evidence",
+      "takeaway_title": "Динамика сокращения MTTD за два месяца",
+      "subtitle": "График улучшения",
+      "blocks": [
+        {
+          "id": "b7",
+          "kind": "series",
+          "heading": "",
+          "items": [],
+          "series_ids": [
+            "ser_mttd"
+          ],
+          "fact_ids": [],
+          "quote_id": null,
+          "image_prompt": "",
+          "table": null
+        }
+      ],
+      "speaker_notes": "",
+      "figures": [
+        {
+          "text": "42",
+          "kind": "cited",
+          "fact_ids": [
+            "f1"
+          ],
+          "formula": ""
+        },
+        {
+          "text": "21",
+          "kind": "derived",
+          "fact_ids": [
+            "f1",
+            "f3"
+          ],
+          "formula": "(f1 + f3) / 2"
+        },
+        {
+          "text": "9",
+          "kind": "cited",
+          "fact_ids": [
+            "f3"
+          ],
+          "formula": ""
+        }
+      ]
+    },
+    {
+      "index": 8,
+      "intent": "evidence",
+      "takeaway_title": "Время обнаружения сократилось в 4.7 раза",
+      "subtitle": "Ключевая выгода",
+      "blocks": [
+        {
+          "id": "b8",
+          "kind": "paragraph",
+          "heading": "",
+          "items": [
+            "Сравнение базового показателя (42 мин) и результата пилота (9 мин) демонстрирует кратный рост эффективности. Это позволяет командам фокусироваться на развитии продукта, а не на тушении пожаров."
+          ],
+          "series_ids": [],
+          "fact_ids": [],
+          "quote_id": null,
+          "image_prompt": "",
+          "table": null
+        }
+      ],
+      "speaker_notes": "",
+      "figures": [
+        {
+          "text": "4.7",
+          "kind": "derived",
+          "fact_ids": [
+            "f1",
+            "f3"
+          ],
+          "formula": "f1 / f3"
+        }
+      ]
+    },
+    {
+      "index": 9,
+      "intent": "ask",
+      "takeaway_title": "Запуск пилота в трех новых командах",
+      "subtitle": "Следующие шаги",
+      "blocks": [
+        {
+          "id": "b9",
+          "kind": "steps",
+          "heading": "",
+          "items": [
+            "1. Согласование списка команд-участников до конца недели.",
+            "2. Интеграция платформы в CI/CD пайплайны за 2 недели.",
+            "3. Обучение инженеров и настройка алертинга за 1 неделю.",
+            "4. Оценка результатов через месяц по метрике MTTD."
+          ],
+          "series_ids": [],
+          "fact_ids": [],
+          "quote_id": null,
+          "image_prompt": "",
+          "table": null
+        }
+      ],
+      "speaker_notes": "",
+      "figures": []
+    },
+    {
+      "index": 10,
+      "intent": "closing",
+      "takeaway_title": "Готовы обсудить детали пилота",
+      "subtitle": "Вопросы и ответы",
+      "blocks": [
+        {
+          "id": "b10",
+          "kind": "paragraph",
+          "heading": "",
+          "items": [
+            "Спасибо за внимание. Мы готовы ответить на технические вопросы по интеграции и безопасности. Давайте определим даты старта для новых команд."
+          ],
+          "series_ids": [],
+          "fact_ids": [],
+          "quote_id": null,
+          "image_prompt": "",
+          "table": null
+        }
+      ],
+      "speaker_notes": "",
+      "figures": []
+    }
+  ]
+}

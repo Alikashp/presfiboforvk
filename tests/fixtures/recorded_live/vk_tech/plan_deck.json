@@ -1,0 +1,274 @@
+{
+  "title": "Платформа наблюдаемости для инженерных команд",
+  "subtitle": "Сокращение времени обнаружения инцидентов",
+  "purpose": "product",
+  "language": "ru",
+  "slides": [
+    {
+      "index": 1,
+      "intent": "title",
+      "takeaway_title": "Единая платформа наблюдаемости",
+      "subtitle": "Для инженерных команд",
+      "blocks": [
+        {
+          "id": "b1_1",
+          "kind": "paragraph",
+          "heading": "Ускорьте обнаружение инцидентов в 4 раза",
+          "items": [
+            "Презентация решения для технических руководителей"
+          ],
+          "series_ids": [],
+          "fact_ids": [],
+          "quote_id": null,
+          "image_prompt": "",
+          "table": null
+        }
+      ],
+      "speaker_notes": "",
+      "figures": []
+    },
+    {
+      "index": 2,
+      "intent": "agenda",
+      "takeaway_title": "План презентации",
+      "subtitle": "Ключевые этапы",
+      "blocks": [
+        {
+          "id": "b2_1",
+          "kind": "steps",
+          "heading": "",
+          "items": [
+            "Проблема фрагментации инструментов",
+            "Решение: единая платформа",
+            "Результаты пилотного проекта",
+            "План внедрения и следующий шаг"
+          ],
+          "series_ids": [],
+          "fact_ids": [],
+          "quote_id": null,
+          "image_prompt": "",
+          "table": null
+        }
+      ],
+      "speaker_notes": "",
+      "figures": []
+    },
+    {
+      "index": 3,
+      "intent": "problem",
+      "takeaway_title": "Инциденты обнаруживаются слишком поздно",
+      "subtitle": "Среднее время — 42 минуты",
+      "blocks": [
+        {
+          "id": "b3_1",
+          "kind": "kpi",
+          "heading": "42 минуты",
+          "items": [
+            "Среднее время обнаружения инцидента в текущих условиях"
+          ],
+          "series_ids": [],
+          "fact_ids": [],
+          "quote_id": null,
+          "image_prompt": "",
+          "table": null
+        }
+      ],
+      "speaker_notes": "",
+      "figures": [
+        {
+          "text": "42 минуты",
+          "kind": "cited",
+          "fact_ids": [
+            "f1"
+          ],
+          "formula": ""
+        }
+      ]
+    },
+    {
+      "index": 4,
+      "intent": "context",
+      "takeaway_title": "Команды тратят ресурсы на 4 системы",
+      "subtitle": "Фрагментация стека мониторинга",
+      "blocks": [
+        {
+          "id": "b4_1",
+          "kind": "kpi",
+          "heading": "4 системы",
+          "items": [
+            "Среднее количество различных инструментов мониторинга на команду"
+          ],
+          "series_ids": [],
+          "fact_ids": [],
+          "quote_id": null,
+          "image_prompt": "",
+          "table": null
+        }
+      ],
+      "speaker_notes": "",
+      "figures": [
+        {
+          "text": "4 системы",
+          "kind": "cited",
+          "fact_ids": [
+            "f2"
+          ],
+          "formula": ""
+        }
+      ]
+    },
+    {
+      "index": 5,
+      "intent": "solution",
+      "takeaway_title": "Единая платформа заменяет разрозненные инструменты",
+      "subtitle": "Централизованный мониторинг",
+      "blocks": [
+        {
+          "id": "b5_1",
+          "kind": "bullets",
+          "heading": "",
+          "items": [
+            "Агрегация логов, метрик и трассировок в одном окне",
+            "Снижение когнитивной нагрузки на инженеров",
+            "Устранение необходимости переключаться между системами"
+          ],
+          "series_ids": [],
+          "fact_ids": [],
+          "quote_id": null,
+          "image_prompt": "",
+          "table": null
+        }
+      ],
+      "speaker_notes": "",
+      "figures": []
+    },
+    {
+      "index": 6,
+      "intent": "how_it_works",
+      "takeaway_title": "Автоматизация корреляции данных",
+      "subtitle": "Как работает платформа",
+      "blocks": [
+        {
+          "id": "b6_1",
+          "kind": "steps",
+          "heading": "",
+          "items": [
+            "Сбор данных со всех сервисов в единый поток",
+            "Автоматическое связывание логов и метрик",
+            "Мгновенное выявление аномалий и причин сбоев"
+          ],
+          "series_ids": [],
+          "fact_ids": [],
+          "quote_id": null,
+          "image_prompt": "",
+          "table": null
+        }
+      ],
+      "speaker_notes": "",
+      "figures": []
+    },
+    {
+      "index": 7,
+      "intent": "evidence",
+      "takeaway_title": "Пилот сократил время обнаружения до 9 минут",
+      "subtitle": "Результат в двух командах",
+      "blocks": [
+        {
+          "id": "b7_1",
+          "kind": "kpi",
+          "heading": "9 минут",
+          "items": [
+            "Новое среднее время обнаружения инцидента после внедрения"
+          ],
+          "series_ids": [],
+          "fact_ids": [],
+          "quote_id": null,
+          "image_prompt": "",
+          "table": null
+        }
+      ],
+      "speaker_notes": "",
+      "figures": [
+        {
+          "text": "9 минут",
+          "kind": "cited",
+          "fact_ids": [
+            "f3"
+          ],
+          "formula": ""
+        }
+      ]
+    },
+    {
+      "index": 8,
+      "intent": "comparison",
+      "takeaway_title": "Динамика улучшения показателей",
+      "subtitle": "Снижение MTTD за 2 месяца",
+      "blocks": [
+        {
+          "id": "b8_1",
+          "kind": "series",
+          "heading": "",
+          "items": [],
+          "series_ids": [
+            "ser_mttd"
+          ],
+          "fact_ids": [],
+          "quote_id": null,
+          "image_prompt": "",
+          "table": null
+        }
+      ],
+      "speaker_notes": "",
+      "figures": []
+    },
+    {
+      "index": 9,
+      "intent": "ask",
+      "takeaway_title": "Запустите пилот в вашей команде",
+      "subtitle": "Подтверждение гипотезы",
+      "blocks": [
+        {
+          "id": "b9_1",
+          "kind": "bullets",
+          "heading": "",
+          "items": [
+            "Протестировать интеграцию с текущим стеком",
+            "Измерить реальное сокращение времени реакции",
+            "Оценить влияние на продуктивность инженеров"
+          ],
+          "series_ids": [],
+          "fact_ids": [],
+          "quote_id": null,
+          "image_prompt": "",
+          "table": null
+        }
+      ],
+      "speaker_notes": "",
+      "figures": []
+    },
+    {
+      "index": 10,
+      "intent": "closing",
+      "takeaway_title": "Готовы начать пилотный проект?",
+      "subtitle": "Свяжитесь с нами",
+      "blocks": [
+        {
+          "id": "b10_1",
+          "kind": "paragraph",
+          "heading": "Контакты для обсуждения деталей",
+          "items": [
+            "Обсудим техническую интеграцию и сроки запуска"
+          ],
+          "series_ids": [],
+          "fact_ids": [],
+          "quote_id": null,
+          "image_prompt": "",
+          "table": null
+        }
+      ],
+      "speaker_notes": "",
+      "figures": []
+    }
+  ]
+}

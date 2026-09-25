@@ -35,7 +35,7 @@ from deckwright.layout.strategy import (
 )
 from deckwright.layout.text_metrics import metrics_for_spec
 from deckwright.parse.opener import parse_template
-from deckwright.schemas import Box, DeckPlan, SlotRole
+from deckwright.schemas import Box, Color, DeckPlan, SlotRole
 
 CONFIG = "configs/config.yaml"
 VARIANTS = ("airy", "balanced", "dense")
@@ -310,11 +310,22 @@ def test_text_is_readable_on_the_background_it_lands_on(specs, plan):
                     backdrop = element.backdrop or slide.background
                     if element.text is None or backdrop is None:
                         continue
+                    # Бывает подложка, на которой порога не даёт никакой
+                    # цвет: на фиолетовой карточке синтетического тёмного
+                    # шаблона у белого 4.35, у чёрного 4.4. Тогда требуется
+                    # лучший достижимый контраст, а не невозможный.
+                    reachable = min(
+                        MIN_CONTRAST,
+                        max(
+                            Color(rgb=rgb).contrast_ratio(backdrop)
+                            for rgb in ("FFFFFF", "111111")
+                        ),
+                    )
                     for paragraph in element.text.paragraphs:
                         ratio = paragraph.style.color.contrast_ratio(backdrop)
-                        assert ratio >= MIN_CONTRAST, (
+                        assert ratio >= reachable - 0.01, (
                             f"{name}/{variant}: слайд {slide.index}, {element.id} — "
-                            f"контраст {ratio:.2f} при пороге {MIN_CONTRAST}"
+                            f"контраст {ratio:.2f} при достижимом {reachable:.2f}"
                         )
 
 
@@ -554,3 +565,63 @@ def test_planner_is_told_the_capacity_not_the_generic_threshold():
     ) in lines
     assert "абзац (paragraph): не длиннее 132" in lines
     assert "не больше 6" not in lines
+
+
+def test_list_is_spread_over_the_cards_one_item_each():
+    """Список из трёх пунктов на композиции с четырьмя карточками.
+
+    Главный дефект листов #12: весь список в первой карточке при трёх пустых
+    рядом, 14 слайдов из 90 на `vk_tech`. Каждой мысли — своя карточка;
+    лишняя карточка остаётся свободной, и рендер её уберёт.
+    """
+    from deckwright.layout.matcher import _seat, _usable_slots
+    from deckwright.schemas import (
+        BlockKind,
+        ContentBlock,
+        Pattern,
+        PatternClass,
+        Provenance,
+        Repeater,
+        Slot,
+        SourceKind,
+    )
+
+    inch = 914400
+    here = Provenance(kind=SourceKind.SLIDE, ref="test")
+    body = Slot(id="b", role=SlotRole.BODY, box=Box(x=inch, y=inch, w=2 * inch, h=2 * inch),
+                provenance=here)
+    cards = Repeater(
+        id="rep",
+        item_slots=[body],
+        item_box=body.box,
+        observed_count=4,
+        max_count=4,
+        pitch_emu=2 * inch + inch // 4,
+        gutter_emu=inch // 4,
+        member_offsets=[(n * (2 * inch + inch // 4), 0) for n in range(4)],
+        provenance=here,
+    )
+    title = Slot(id="t", role=SlotRole.TITLE, box=Box(x=inch, y=0, w=8 * inch, h=inch // 2),
+                 provenance=here)
+    pattern = Pattern(
+        id="p", pattern_class=PatternClass.GRID, donor_slide_index=1, slots=[title],
+        repeaters=[cards], content_area=Box(x=0, y=0, w=10 * inch, h=5 * inch),
+        provenance=here,
+    )
+    block = ContentBlock(id="b1", kind=BlockKind.BULLETS, items=["один", "два", "три"])
+    free = _usable_slots(pattern, 10 * inch, int(5.625 * inch))
+
+    seats = _seat(pattern, block, SlotRole.BULLETS, free, [title.box])
+
+    assert seats is not None and len(seats) == 3
+    assert [lines for _, lines in seats] == [["один"], ["два"], ["три"]]
+    assert [slot.box.x for slot, _ in seats] == [inch + n * cards.pitch_emu for n in range(3)]
+    # Четвёртая карточка не достаётся следующему блоку: иначе он сел бы в
+    # неё при пустых второй и третьей.
+    assert not any(slot.id.startswith("rep_") for slot in free)
+
+    many = ContentBlock(id="b2", kind=BlockKind.STEPS, items=[str(n) for n in range(6)])
+    seats = _seat(pattern, many, SlotRole.BULLETS,
+                  _usable_slots(pattern, 10 * inch, int(5.625 * inch)), [title.box])
+    assert seats is not None
+    assert [len(lines) for _, lines in seats] == [2, 2, 1, 1]

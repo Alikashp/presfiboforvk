@@ -13,7 +13,7 @@ import pytest
 from deckwright.parse.geometry import IDENTITY, Transform, shape_box
 from deckwright.parse.opener import parse_template
 from deckwright.parse.tokens import Usage, build_fonts, build_grid, build_type_scale
-from deckwright.schemas import SlotRole
+from deckwright.schemas import Color, SlotRole
 
 
 @pytest.fixture(scope="module")
@@ -344,3 +344,100 @@ def test_text_sits_on_the_backdrop_it_is_drawn_on():
     outside = local_backdrop(tree, Box(x=100, y=100, w=300, h=300), {}, {})
     assert inside is not None and inside.rgb.upper() == "000000"
     assert outside is not None and outside.rgb.upper() == "FFFFFF"
+
+
+_P = "http://schemas.openxmlformats.org/presentationml/2006/main"
+_A = "http://schemas.openxmlformats.org/drawingml/2006/main"
+
+
+def _rect(ident, x, y, w, h, fill="", text=""):
+    body = (
+        f'<p:txBody><a:bodyPr/><a:p><a:r><a:t>{text}</a:t></a:r></a:p></p:txBody>'
+        if text
+        else ""
+    )
+    return (
+        f'<p:sp xmlns:p="{_P}" xmlns:a="{_A}"><p:nvSpPr><p:cNvPr id="{ident}" name="r"/>'
+        f"<p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm>"
+        f'<a:off x="{x}" y="{y}"/><a:ext cx="{w}" cy="{h}"/></a:xfrm>'
+        f"{fill}</p:spPr>{body}</p:sp>"
+    )
+
+
+def test_theme_colour_keeps_its_brightness_modifier():
+    """`accent4` с `lumMod 50%` — тёмная карточка, а не цвет темы как есть."""
+    from lxml import etree
+
+    from deckwright.parse.tokens import resolve_color
+
+    node = etree.fromstring(
+        f'<a:solidFill xmlns:a="{_A}"><a:schemeClr val="accent4">'
+        '<a:lumMod val="50000"/></a:schemeClr></a:solidFill>'
+    )
+    plain = resolve_color(node, {"accent4": "029676"}, {})
+    assert plain is not None
+    assert plain.luminance < 0.5 * Color(rgb="029676").luminance
+
+
+def test_cards_holding_text_of_different_height_are_one_repeater():
+    """Три одинаковые подложки с текстом разной высоты — одна сетка.
+
+    На holdout текст-заглушка в трёх карточках разной длины, рамки текста
+    разной высоты, и повтором опознавались только пустые подложки: список
+    ложился в одну карточку, две оставались пустыми.
+    """
+    from lxml import etree
+
+    from deckwright.parse.patterns import mine_slide
+    from deckwright.schemas import TextStyle
+
+    inch = 914400
+    fill = f'<a:solidFill xmlns:a="{_A}"><a:srgbClr val="336633"/></a:solidFill>'
+    shapes = [_rect(1, inch, inch // 4, 6 * inch, inch // 2, text="Заголовок слайда")]
+    for number, height in enumerate((2.0, 2.3, 1.7)):
+        x = inch + number * 3 * inch
+        shapes.append(_rect(10 + number, x, inch, 2 * inch, 3 * inch, fill=fill))
+        shapes.append(
+            _rect(20 + number, x + inch // 10, inch + inch // 4, int(1.8 * inch),
+                  int(height * inch), text="Lorem ipsum " * (number + 1))
+        )
+    tree = etree.fromstring(f'<p:spTree xmlns:p="{_P}" xmlns:a="{_A}">{"".join(shapes)}</p:spTree>')
+    pattern = mine_slide(
+        tree, 1, 10 * inch, int(5.625 * inch), None,
+        TextStyle(font_family="Arial", size_pt=14, color=Color(rgb="000000")),
+    )
+    assert pattern is not None
+    cards = [r for r in pattern.repeaters if r.observed_count == 3]
+    assert cards, f"карточки не опознаны повтором: {pattern.repeaters}"
+    card = cards[0]
+    assert card.item_slots, "у карточки нет места под текст"
+    # Рамка каждого элемента — вся карточка, а не её текст.
+    for number, frame in enumerate(card.member_frames):
+        assert frame.x <= inch + number * 3 * inch
+        assert frame.w >= 2 * inch
+
+
+def test_translucent_card_is_seen_over_the_slide_background():
+    """Синяя карточка с прозрачностью 70% на чёрном — тёмно-синяя.
+
+    Без наложения она считалась ярко-синей, и на `vk_workspace` под неё
+    выбирался тёмный текст — синий по тёмно-синему.
+    """
+    from lxml import etree
+
+    from deckwright.parse.tokens import local_backdrop
+    from deckwright.schemas import Box
+
+    fill = (
+        f'<a:solidFill xmlns:a="{_A}"><a:srgbClr val="0077FF">'
+        '<a:alpha val="30000"/></a:srgbClr></a:solidFill>'
+    )
+    tree = etree.fromstring(
+        f'<p:spTree xmlns:p="{_P}" xmlns:a="{_A}">'
+        + _rect(1, 0, 0, 1000, 1000, fill=fill)
+        + "</p:spTree>"
+    )
+    box = Box(x=100, y=100, w=300, h=300)
+    seen = local_backdrop(tree, box, {}, {}, base=Color(rgb="000000"))
+    assert seen is not None and seen.luminance < Color(rgb="0077FF").luminance / 3
+    assert local_backdrop(tree, box, {}, {}) is None, "фон неизвестен — цвет тоже"

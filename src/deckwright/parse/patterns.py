@@ -100,23 +100,35 @@ def _max_size(element: etree._Element) -> float:
     return max(sizes) if sizes else 0.0
 
 
+_SIZE_QUANTUM = 45_720  # 1/20 дюйма
+
+# Роли основного текста элемента: их у карточки одна.
+_BODY_ROLES = frozenset({SlotRole.BODY, SlotRole.BULLETS})
+
+
 def _signature(element: etree._Element, box: Box) -> tuple:
     """Структурная подпись фигуры — по чему опознаётся повтор.
 
-    В подпись входят состав дочерних тегов и габариты, огрублённые до сотой
-    дюйма. Ни имена, ни координаты: имена в этих колодах бессмысленны, а
-    координаты у элементов сетки как раз и различаются.
+    В подпись входят состав дочерних тегов и габариты, огрублённые до
+    двадцатой дюйма. Ни имена, ни координаты: имена в этих колодах
+    бессмысленны, а координаты у элементов сетки как раз и различаются.
     """
     tags = defaultdict(int)
     for node in element.iter():
         name = etree.QName(node).localname
         if name in ("sp", "pic", "graphicFrame", "cxnSp", "grpSp"):
             tags[name] += 1
+    # Есть ли в фигуре текст — да, а сколько в нём фрагментов — нет: у
+    # трёх одинаковых карточек holdout текст-заглушка разной длины, и по
+    # числу фрагментов они не опознавались повтором.
+    # Габариты — с точностью до двадцатой дюйма: копии карточки у дизайнера
+    # расходятся на сотую (1.71 и 1.72 на `vk_tech`), и ряд из пяти распадался
+    # на четыре и одну. Случайно похожие фигуры отсекает проверка равного шага.
     return (
         tuple(sorted(tags.items())),
-        round(box.w / 9144),
-        round(box.h / 9144),
-        len(element.findall(f".//{{{A_NS}}}t")),
+        round(box.w / _SIZE_QUANTUM),
+        round(box.h / _SIZE_QUANTUM),
+        element.find(f".//{{{A_NS}}}t") is not None,
     )
 
 
@@ -256,7 +268,7 @@ def _cluster(values: list[int], tolerance: int) -> list[list[int]]:
     return clusters
 
 
-def _grid_pitch(shapes: list[_Shape], slide_w: int) -> tuple[str, int] | None:
+def _grid_pitch(shapes: list[_Shape], slide_w: int) -> int | None:
     """Шаг сетки по двум осям: элементы стоят рядами и колонками.
 
     Карточки часто разложены в две строки по три, а не в одну полосу. Такая
@@ -271,8 +283,7 @@ def _grid_pitch(shapes: list[_Shape], slide_w: int) -> tuple[str, int] | None:
     if len(columns) * len(rows) != len(shapes):
         return None
     centers = [round(sum(c) / len(c)) for c in columns]
-    pitch = _even_pitch(centers)
-    return ("grid", pitch) if pitch else None
+    return _even_pitch(centers)
 
 
 def _even_pitch(positions: list[int]) -> int | None:
@@ -307,6 +318,9 @@ def _find_repeaters(
 
     repeaters: list[Repeater] = []
     consumed: set[int] = set()
+    # Повторы без текста — подложки карточек. Места под содержание в них нет,
+    # но они — часть элемента, и убирать незаполненный элемент надо с ними.
+    frames: list[tuple[str, int, list[_Shape]]] = []
 
     # Сначала самые крупные композиции: внешняя группа должна забрать свои
     # фигуры раньше, чем её же дети образуют собственный «повтор».
@@ -327,14 +341,33 @@ def _find_repeaters(
             pitch = _even_pitch([s.box.y for s in vertical])
             axis, ordered = "vertical", vertical
         if pitch is None:
-            found = _grid_pitch(members, slide_w)
-            if found is None:
+            pitch = _grid_pitch(members, slide_w)
+            if pitch is None:
                 continue
-            axis, pitch, ordered = found[0], found[1], horizontal
+            # Порядок чтения: ряд за рядом, в ряду слева направо. Первым
+            # должен идти левый верхний элемент — от него считаются сдвиги.
+            tolerance = max(1, slide_w // 100)
+            axis = "grid"
+            ordered = sorted(members, key=lambda s: (round(s.box.y / tolerance), s.box.x))
 
         first = ordered[0]
         item_slots = _slots_of(first, shapes, slide_h, prefix=f"r{index}", slide_w=slide_w)
+        held: list[list[_Shape]] = []
         if not item_slots:
+            # Подложка без текста — но, может быть, текст лежит на ней
+            # отдельной фигурой. На holdout три одинаковые карточки несут по
+            # тексту разной высоты, и повтором опознавались только подложки.
+            held = [_texts_on(member, shapes, consumed) for member in ordered]
+            if all(held) and len({len(texts) for texts in held}) == 1:
+                item_slots = _slots_on(held[0], slide_h, slide_w, prefix=f"r{index}")
+                # Два основных текста на одной подложке — это ряд карточек,
+                # а не карточка: сетка 2×2 на `vk_tech` иначе читалась двумя
+                # строками, и три пункта ложились по два в карточку.
+                bodies = [slot for slot in item_slots if slot.role in _BODY_ROLES]
+                if len(bodies) > 1:
+                    item_slots, held = [], []
+        if not item_slots:
+            frames.append((axis, pitch, ordered))
             continue
 
         span = slide_h if axis == "vertical" else slide_w
@@ -343,7 +376,10 @@ def _find_repeaters(
             continue
         gutter = max(0, pitch - item_size)
         # Сколько элементов физически помещается в полосу с тем же шагом.
+        # Сетку в несколько рядов раздвигать некуда: у неё нет одной полосы.
         fits = max(len(ordered), int(span // pitch)) if pitch else len(ordered)
+        if axis == "grid":
+            fits = len(ordered)
 
         repeaters.append(
             Repeater(
@@ -356,6 +392,10 @@ def _find_repeaters(
                 max_count=min(fits, len(ordered) + COUNT_SLACK),
                 pitch_emu=pitch,
                 gutter_emu=gutter,
+                member_offsets=[
+                    (shape.box.x - first.box.x, shape.box.y - first.box.y)
+                    for shape in ordered
+                ],
                 provenance=Provenance(
                     kind=SourceKind.SLIDE,
                     ref=f"slide{slide_index}",
@@ -368,8 +408,98 @@ def _find_repeaters(
             consumed.update(
                 id(element) for element, _, _ in iter_shapes(shape.element)
             )
+        consumed.update(id(text.element) for texts in held for text in texts)
 
-    return _merge_repeaters(repeaters), consumed
+    return _with_frames(_merge_repeaters(repeaters), frames), consumed
+
+
+def _texts_on(frame: _Shape, shapes: list[_Shape], consumed: set[int]) -> list[_Shape]:
+    """Текстовые фигуры, лежащие на подложке целиком и ещё ничьи."""
+    return [
+        shape
+        for shape in shapes
+        if shape is not frame
+        and shape.text
+        and id(shape.element) not in consumed
+        and _within(shape.box, frame.box)
+    ]
+
+
+def _within(inner: Box, outer: Box) -> bool:
+    """Лежит ли рамка на другой: девять десятых её площади внутри."""
+    width = min(inner.right, outer.right) - max(inner.x, outer.x)
+    height = min(inner.bottom, outer.bottom) - max(inner.y, outer.y)
+    return width > 0 and height > 0 and width * height >= 0.9 * inner.area
+
+
+def _slots_on(texts: list[_Shape], slide_h: int, slide_w: int, prefix: str) -> list[Slot]:
+    """Слоты элемента из текстов, лежащих на его подложке."""
+    slots = []
+    for position, shape in enumerate(texts):
+        role = _role_from_geometry(shape, texts, slide_h, slide_w, inside_repeater=True)
+        if role is SlotRole.DECOR:
+            continue
+        slots.append(
+            Slot(
+                id=f"{prefix}_t{position}",
+                role=role,
+                box=shape.box,
+                placeholder_text=shape.text[:80],
+                provenance=Provenance(kind=SourceKind.SLIDE, ref="элемент повторителя"),
+            )
+        )
+    return slots
+
+
+def _with_frames(
+    repeaters: list[Repeater], frames: list[tuple[str, int, list[_Shape]]]
+) -> list[Repeater]:
+    """Каждому элементу повторителя — рамка всего элемента, с подложкой.
+
+    Фигура — часть элемента, если она повторяется с тем же шагом и тем же
+    числом, а её первый экземпляр стоит на одной полосе с текстом первого
+    элемента: перекрывает его проекцию на ось повторения, а у сетки — на обе
+    оси. Так в элемент попадают подложка карточки, плашка над текстом и
+    рамка пиктограммы сбоку. Экземпляры сопоставляются по порядку.
+    """
+    result = []
+    for repeater in repeaters:
+        text = repeater.item_box
+        for slot in repeater.item_slots:
+            text = _union(text, slot.box)
+        members = [
+            Box(x=text.x + dx, y=text.y + dy, w=text.w, h=text.h)
+            for dx, dy in repeater.member_offsets
+        ]
+        for axis, pitch, ordered in frames:
+            if (
+                axis == repeater.axis
+                and len(ordered) == len(members)
+                and abs(pitch - repeater.pitch_emu) <= repeater.pitch_emu * PITCH_TOLERANCE
+                and _same_lane(ordered[0].box, text, axis)
+            ):
+                members = [
+                    _union(member, shape.box)
+                    for member, shape in zip(members, ordered, strict=True)
+                ]
+        result.append(repeater.model_copy(update={"member_frames": members}))
+    return result
+
+
+def _same_lane(a: Box, b: Box, axis: str) -> bool:
+    """Стоят ли две рамки на одной полосе вдоль оси повторения."""
+    across_x = min(a.right, b.right) > max(a.x, b.x)
+    across_y = min(a.bottom, b.bottom) > max(a.y, b.y)
+    if axis == "vertical":
+        return across_y
+    if axis == "grid":
+        return across_x and across_y
+    return across_x
+
+
+def _union(a: Box, b: Box) -> Box:
+    x, y = min(a.x, b.x), min(a.y, b.y)
+    return Box(x=x, y=y, w=max(a.right, b.right) - x, h=max(a.bottom, b.bottom) - y)
 
 
 def _merge_repeaters(repeaters: list[Repeater]) -> list[Repeater]:
