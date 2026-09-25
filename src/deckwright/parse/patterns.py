@@ -476,7 +476,7 @@ def _with_frames(
                 axis == repeater.axis
                 and len(ordered) == len(members)
                 and abs(pitch - repeater.pitch_emu) <= repeater.pitch_emu * PITCH_TOLERANCE
-                and _same_lane(ordered[0].box, text, axis)
+                and _same_lane(ordered[0].box, text, axis, repeater.pitch_emu)
             ):
                 members = [
                     _union(member, shape.box)
@@ -486,15 +486,37 @@ def _with_frames(
     return result
 
 
-def _same_lane(a: Box, b: Box, axis: str) -> bool:
-    """Стоят ли две рамки на одной полосе вдоль оси повторения."""
-    across_x = min(a.right, b.right) > max(a.x, b.x)
-    across_y = min(a.bottom, b.bottom) > max(a.y, b.y)
-    if axis == "vertical":
-        return across_y
+def _same_lane(frame: Box, text: Box, axis: str, pitch: int) -> bool:
+    """Принадлежит ли фигура тому же элементу, что и текст.
+
+    Да, если она стоит на одной полосе с текстом вдоль оси повторения: та
+    же колонка у горизонтального ряда, та же строка у вертикального, та же
+    клетка у сетки. Или — рядом с текстом поперёк неё: кружок под фото
+    спикера слева от подписи на финале `vk_workspace` проекцию подписи не
+    перекрывает, но стоит в том же ряду в промежутке между элементами и к
+    своей подписи ближе, чем к соседней.
+    """
+    across_x = min(frame.right, text.right) > max(frame.x, text.x)
+    across_y = min(frame.bottom, text.bottom) > max(frame.y, text.y)
     if axis == "grid":
         return across_x and across_y
-    return across_x
+    along, beside = (across_y, across_x) if axis == "vertical" else (across_x, across_y)
+    if along:
+        return True
+    if not beside:
+        return False
+    # Зазор вдоль оси не больше промежутка между элементами — и до своего
+    # текста ближе, чем до соседнего.
+    start, end, size = (
+        (frame.y, frame.bottom, text.h) if axis == "vertical" else (frame.x, frame.right, text.w)
+    )
+    first = text.y if axis == "vertical" else text.x
+
+    def gap(offset: int) -> int:
+        return max(0, first + offset - end, start - (first + offset + size))
+
+    # Сосед у первого элемента — только следующий: предыдущего нет.
+    return gap(0) <= max(0, pitch - size) and gap(0) < gap(pitch)
 
 
 def _union(a: Box, b: Box) -> Box:

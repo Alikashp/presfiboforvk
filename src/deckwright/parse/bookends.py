@@ -23,6 +23,7 @@ from __future__ import annotations
 
 from lxml import etree
 
+from deckwright.parse.geometry import iter_shapes
 from deckwright.schemas import (
     Box,
     Pattern,
@@ -103,7 +104,29 @@ def _title_in_body(slide, slide_h: int) -> bool:
     return False
 
 
-def _grown(slots: list[Slot], slide_h: int) -> list[Slot]:
+def _decor_boxes(slide, slide_w: int, slide_h: int) -> list[Box]:
+    """Рамки декора слайда и его layout'а: всё, кроме плейсхолдеров и фона.
+
+    Фон — фигура крупнее трёх пятых слайда: по нему текст и должен лежать.
+    """
+    boxes = []
+    for tree in (slide.slide_layout.shapes._spTree, slide.shapes._spTree):
+        for element, box, _ in iter_shapes(tree):
+            if box is None or box.area <= 0 or box.area > 0.6 * slide_w * slide_h:
+                continue
+            if element.find(f".//{{{P_NS}}}ph") is not None:
+                continue
+            boxes.append(box)
+    return boxes
+
+
+def _inside_mostly(inner: Box, outer: Box) -> bool:
+    width = min(inner.right, outer.right) - max(inner.x, outer.x)
+    height = min(inner.bottom, outer.bottom) - max(inner.y, outer.y)
+    return width > 0 and height > 0 and width * height >= 0.9 * inner.area
+
+
+def _grown(slots: list[Slot], slide_h: int, decor: list[Box] | None = None) -> list[Slot]:
     """Рамки текста под заголовком — с запасом вниз.
 
     Подзаголовок обложки рассчитан на одну строку шаблона («Разработчик
@@ -116,14 +139,25 @@ def _grown(slots: list[Slot], slide_h: int) -> list[Slot]:
         if slot.role is SlotRole.TITLE:
             grown.append(slot)
             continue
-        below = [
-            other.box.y
-            for other in slots
-            if other is not slot
-            and other.box.y >= slot.box.bottom
-            and min(other.box.right, slot.box.right) > max(other.box.x, slot.box.x)
+        # Рост останавливается у первого места или декора под рамкой, а
+        # рамка на панели не выходит за её низ: на обложке holdout текст
+        # иначе сползал с тёмной панели на фотографию, на `vk_workspace` —
+        # на логотип.
+        obstacles = [other.box for other in slots if other is not slot] + [
+            box for box in decor or [] if box != slot.box
         ]
-        limit = min([*below, int(slide_h * BOTTOM_SHARE)])
+        below = [
+            box.y
+            for box in obstacles
+            if box.y >= slot.box.bottom
+            and min(box.right, slot.box.right) > max(box.x, slot.box.x)
+        ]
+        panels = [
+            box.bottom
+            for box in decor or []
+            if box != slot.box and _inside_mostly(slot.box, box)
+        ]
+        limit = min([*below, *panels, int(slide_h * BOTTOM_SHARE)])
         height = min(
             slot.box.h * GROWTH, slot.box.h + int(slide_h * GROWTH_SHARE), limit - slot.box.y
         )
@@ -221,7 +255,7 @@ def bookend_pattern(
             slot.box.x,
         )
     )
-    slots = _grown(slots, slide_h)
+    slots = _grown(slots, slide_h, _decor_boxes(slide, slide_w, slide_h))
     if main.style is None:
         slots = [
             slot.model_copy(update={"style": default_style}) if slot.style is None else slot

@@ -109,6 +109,16 @@ class LengthBudget:
                 "число пунктов под свой текст, разнеси содержание на два слайда "
                 "или оставь главное"
             )
+        for intent, name in (("cover", "титульный слайд"), ("closing", "завершающий слайд")):
+            title = self.curve_for(f"{intent}_title")
+            text = self.curve_for(f"{intent}_text")
+            parts = []
+            if title:
+                parts.append(f"заголовок не длиннее {title[0][1]} символов")
+            if text:
+                parts.append(f"текст под ним — один абзац не длиннее {text[0][1]} символов")
+            if parts:
+                lines.append(f"- {name}: " + ", ".join(parts))
         return "\n".join(lines)
 
 

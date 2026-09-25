@@ -23,6 +23,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from deckwright.layout.fitter import fit_paragraphs
 from deckwright.layout.matcher import _blocks_fit, _title_fits, _usable_slots
 from deckwright.layout.strategy import Strategy, ladder_for_role, role_typical
 from deckwright.layout.text_metrics import metrics_for_spec
@@ -166,3 +167,72 @@ def achievable(
             by_roles[roles] = curve(kind, typical) or curve(kind, None)
         result[kind] = by_roles[roles]
     return result
+
+
+# Виды ограничений для служебных слайдов: {намерение}_{место}.
+BOOKEND_KINDS = ("cover_title", "cover_text", "closing_title", "closing_text")
+
+
+def bookend_limits(spec: TemplateSpec) -> list[tuple[str, int, int]]:
+    """Сколько символов вмещают заголовок и текст обложки и финала шаблона.
+
+    Обложку и финал колода берёт целиком, с кеглем шаблона, поэтому и мерить
+    их надо шаблонным кеглем, а не шкалой контентных макетов: подзаголовок в
+    130 символов садился в подпись спикера обложки `vk_workspace` кеглем 12.
+    Мерятся первые места под текст в том порядке, в каком их заполняет
+    вёрстка: заголовок и первое место под ним.
+    """
+    metrics = metrics_for_spec(spec).metrics
+    if metrics is None:
+        return []
+    by_id = {pattern.id: pattern for pattern in spec.patterns}
+    limits: list[tuple[str, int, int]] = []
+    for prefix, pattern_id in (
+        ("cover", spec.cover_pattern_id),
+        ("closing", spec.closing_pattern_id or spec.cover_pattern_id),
+    ):
+        pattern = by_id.get(pattern_id) if pattern_id else None
+        if pattern is None:
+            continue
+        title = next((s for s in pattern.slots if s.role is SlotRole.TITLE), None)
+        text = next((s for s in pattern.slots if s.role is not SlotRole.TITLE), None)
+        for place, slot in (("title", title), ("text", text)):
+            if slot is None:
+                continue
+            declared = (
+                slot.style.size_pt
+                if slot.style is not None
+                else role_typical(spec, slot.role) or 14.0
+            )
+            # Заголовок вёрстка уменьшает по шкале заголовков — так и мерим.
+            # Текст — не мельче типичного для роли: мелкий текст на обложке и
+            # был дефектом.
+            floor = (
+                min(ladder_for_role(spec, SlotRole.TITLE), default=declared)
+                if place == "title"
+                else min(declared, role_typical(spec, slot.role) or declared)
+            )
+            ladder = sorted(
+                {declared, floor}
+                | {
+                    size
+                    for size in ladder_for_role(spec, slot.role)
+                    if floor <= size <= declared
+                }
+            )
+            chars = _longest_at(metrics, slot.box, ladder, declared)
+            if chars:
+                limits.append((f"{prefix}_{place}", 1, chars))
+    return limits
+
+
+def _longest_at(metrics, box, ladder: list[float], start: float) -> int:
+    """Наибольшая длина модельного текста, влезающая в рамку по этой шкале."""
+    low, high, found = _MIN_ITEM_CHARS, 400, 0
+    while low <= high:
+        middle = (low + high) // 2
+        if fit_paragraphs([_text(middle)], metrics, box, ladder, start).fits:
+            found, low = middle, middle + 1
+        else:
+            high = middle - 1
+    return found

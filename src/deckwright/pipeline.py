@@ -35,7 +35,7 @@ from deckwright.audit import rewrite as rewrite_step
 from deckwright.audit.fixers import apply as apply_fixes
 from deckwright.audit.report import audit_deck
 from deckwright.config import Config
-from deckwright.layout.capacity import achievable
+from deckwright.layout.capacity import achievable, bookend_limits
 from deckwright.layout.matcher import build_deck_ir
 from deckwright.layout.strategy import Strategy
 from deckwright.layout.text_metrics import metrics_for_spec
@@ -177,7 +177,7 @@ def plan_limits(spec: TemplateSpec, cfg: Config) -> tuple[tuple[str, int, int], 
         (kind.value, point.items, point.chars)
         for kind, curve in capacity.items()
         for point in curve
-    )
+    ) + tuple(bookend_limits(spec))
 
 
 def _step_params(model_cfg, steps: tuple[str, ...]) -> dict[str, dict[str, object]]:
