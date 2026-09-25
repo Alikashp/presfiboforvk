@@ -481,3 +481,45 @@ def test_bookends_are_kept_out_of_content_layouts(specs):
             if pattern.id in ids:
                 roles = [slot.role for slot in pattern.slots]
                 assert roles.count(SlotRole.TITLE) == 1, (spec.source_name, pattern.id)
+
+
+def test_avatar_beside_the_caption_belongs_to_the_speaker():
+    """Кружок под фото слева от подписи — часть того же спикера.
+
+    Проекцию подписи он не перекрывает, но стоит в её ряду и к ней ближе,
+    чем к соседней. Без этого второй спикер финала `vk_workspace` уходил
+    подписью, а кружок оставался пустым.
+    """
+    from deckwright.parse.patterns import _same_lane
+    from deckwright.schemas import Box
+
+    inch = 914400
+    caption = Box(x=int(1.65 * inch), y=5 * inch, w=int(2.42 * inch), h=int(0.91 * inch))
+    pitch = int(3.36 * inch)
+    own = Box(x=int(0.47 * inch), y=5 * inch, w=int(0.91 * inch), h=int(0.91 * inch))
+    # Стоит вплотную к следующей подписи — её фигура, не этой.
+    neighbours = Box(x=int(4.2 * inch), y=5 * inch, w=int(0.91 * inch), h=int(0.91 * inch))
+    below = Box(x=int(0.47 * inch), y=7 * inch, w=int(0.91 * inch), h=int(0.3 * inch))
+    assert _same_lane(own, caption, "horizontal", pitch)
+    assert not _same_lane(neighbours, caption, "horizontal", pitch)
+    assert not _same_lane(below, caption, "horizontal", pitch)
+
+
+def test_grown_subtitle_stops_at_the_decor_and_the_panel():
+    """Рамка подзаголовка растёт вниз, но не на логотип и не за край панели."""
+    from deckwright.parse.bookends import _grown
+    from deckwright.schemas import Box, Provenance, Slot, SourceKind
+
+    inch = 914400
+    here = Provenance(kind=SourceKind.SLIDE, ref="test")
+    title = Slot(id="t", role=SlotRole.TITLE, box=Box(x=inch, y=inch, w=6 * inch, h=inch),
+                 provenance=here)
+    text = Slot(id="b", role=SlotRole.BODY, box=Box(x=inch, y=2 * inch, w=6 * inch, h=inch // 4),
+                provenance=here)
+    logo = Box(x=inch, y=int(2.6 * inch), w=inch, h=inch // 4)
+    panel = Box(x=0, y=0, w=8 * inch, h=int(2.4 * inch))
+    slide_h = int(7.5 * inch)
+
+    assert _grown([title, text], slide_h, [logo])[1].box.bottom == logo.y
+    assert _grown([title, text], slide_h, [panel])[1].box.bottom == panel.bottom
+    assert _grown([title, text], slide_h, [])[1].box.h == 3 * text.box.h

@@ -249,3 +249,18 @@ def test_more_characters_fit_at_a_smaller_size():
     assert characters_that_fit(metrics, 18, box_w, box_h) > characters_that_fit(
         metrics, 36, box_w, box_h
     )
+
+
+def test_planner_is_told_how_long_the_cover_and_closing_may_be():
+    """Обложку и финал меряют их рамками и шаблонным кеглем, как и остальное."""
+    from deckwright.plan.budget import LengthBudget
+
+    budget = LengthBudget(
+        title_chars=40, subtitle_chars=30, bullet_chars=50, max_bullets=6,
+        max_words_per_bullet=15, measured_with="test",
+        block_limits=(("cover_title", 1, 60), ("cover_text", 1, 22), ("closing_text", 1, 90)),
+    )
+    lines = budget.as_prompt_lines()
+    assert "титульный слайд: заголовок не длиннее 60 символов" in lines
+    assert "один абзац не длиннее 22 символов" in lines
+    assert "завершающий слайд: текст под ним — один абзац не длиннее 90" in lines
