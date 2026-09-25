@@ -71,6 +71,13 @@ CHECKS: tuple[Check, ...] = (
         FixKind.ASSISTED,
     ),
     _det(
+        "layout.text_without_place",
+        IssueCategory.LAYOUT,
+        Severity.WARNING,
+        "Тексту слайда нет места в композиции шаблона",
+        FixKind.ASSISTED,
+    ),
+    _det(
         "layout.margin_violation",
         IssueCategory.LAYOUT,
         Severity.WARNING,

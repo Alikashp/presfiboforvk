@@ -41,6 +41,7 @@
 | `layout.out_of_bounds` | error | элемент выходит за границы слайда | `automatic` |
 | `layout.overlap` | error | два текстовых элемента накладываются больше чем на 15 % меньшего | `none` |
 | `layout.text_overflow` | warning | текст не влез в рамку даже на минимальной ступени шкалы | `assisted` |
+| `layout.text_without_place` | warning | у обложки или финала шаблона нет места под этот текст: он не вёрстан | `assisted` |
 | `layout.margin_violation` | warning | элемент заходит в поля шаблона | `automatic` |
 | `layout.off_grid` | info | левый край не совпадает с направляющей | `automatic` |
 | `layout.image_stretched` | warning | пропорции картинки разошлись с исходными больше чем на 5 % | `automatic` |

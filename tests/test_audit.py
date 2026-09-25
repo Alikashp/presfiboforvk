@@ -721,3 +721,39 @@ def test_identical_findings_are_collapsed(clean, pack):
     # чинить, и два одинаковых ключа означают выбор наугад.
     keys = [issue.key for issue in report.issues]
     assert len(keys) == len(set(keys)), "ключи находок повторяются"
+
+
+def test_text_without_a_place_on_the_cover_is_a_finding(tmp_path):
+    """Обложка шаблона — только заголовок; абзац титула некуда положить.
+
+    Класть его в свободную полосу поверх оформления или в подпись спикера
+    нельзя: находка `"layout.text_without_place"`, текст не вёрстан.
+    """
+    import json
+
+    from pptx import Presentation as NewPresentation
+
+    from deckwright.layout.matcher import build_deck_ir
+    from deckwright.parse.opener import parse_template
+    from deckwright.schemas import DeckPlan
+
+    deck = NewPresentation()
+    cover = deck.slides.add_slide(deck.slide_layouts[5])
+    cover.shapes.title.text = "Название"
+    cover.shapes.title.top = deck.slide_height // 3
+    content = deck.slides.add_slide(deck.slide_layouts[1])
+    content.shapes.title.text = "Заголовок"
+    content.placeholders[1].text_frame.text = "Текст"
+    path = tmp_path / "cover_only_title.pptx"
+    deck.save(path)
+    spec = parse_template(path)
+    assert spec.cover_pattern_id is not None
+
+    raw = json.loads(Path("tests/fixtures/recorded/plan_deck.json").read_text("utf-8"))
+    raw["slides"] = raw["slides"][:1]
+    raw["slides"][0]["blocks"] = [{"id": "p", "kind": "paragraph", "items": ["Подзаголовок"]}]
+    plan = DeckPlan.model_validate(raw)
+
+    built, issues = build_deck_ir(spec, plan, "balanced")
+    assert [i.check_id for i in issues] == ["layout.text_without_place"]
+    assert all(e.role.value == "title" for e in built.slides[0].elements if e.text)

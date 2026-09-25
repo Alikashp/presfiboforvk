@@ -28,6 +28,8 @@ class SlotRole(StrEnum):
     BODY = "body"
     BULLETS = "bullets"
     CAPTION = "caption"
+    # Подпись выступающего рядом с его фото — на обложке и финале шаблона.
+    SPEAKER = "speaker"
     KPI_VALUE = "kpi_value"
     KPI_LABEL = "kpi_label"
     QUOTE = "quote"

@@ -988,6 +988,60 @@ def _overflow_issue(
     )
 
 
+def _no_place_issue(slide_index: int, block_id: str, box: Box) -> Issue:
+    return Issue(
+        check_id="layout.text_without_place",
+        kind=CheckKind.DETERMINISTIC,
+        category=IssueCategory.LAYOUT,
+        severity=Severity.WARNING,
+        slide_index=slide_index,
+        bbox=box,
+        message=(
+            f"блок {block_id!r}: у служебного слайда шаблона нет места под этот текст, "
+            "он не вёрстан"
+        ),
+        fix=ProposedFix(
+            kind=FixKind.ASSISTED,
+            description="убрать текст с титула или финала либо перенести его на соседний слайд",
+            action="shorten_or_split",
+            params={"slide_index": slide_index},
+        ),
+    )
+
+
+def _speaker_elements(
+    pattern: Pattern, pack, slide_index: int, font_family: str, spec: TemplateSpec
+) -> list[Element]:
+    """Подпись спикера — из данных о выступающем, а не из текста плана.
+
+    Данных нет — подписи нет, и рендер уберёт спикера целиком, с кружком
+    под фото. Одна подпись на слайд: второго выступающего пакет не знает.
+    """
+    brief = getattr(pack, "brief", None)
+    names = (getattr(brief, "author", ""), getattr(brief, "author_role", ""))
+    lines = [line for line in names if line]
+    speaker = next((slot for slot in pattern.slots if slot.role is SlotRole.SPEAKER), None)
+    if not lines or speaker is None:
+        return []
+    size = (
+        speaker.style.size_pt
+        if speaker.style is not None
+        else role_typical(spec, SlotRole.BODY)
+    )
+    color = _text_color(pattern, SlotRole.SPEAKER, pattern.is_dark, _under(speaker, None), spec)
+    style = TextStyle(font_family=font_family, size_pt=size or 12.0, color=color)
+    return [
+        Element(
+            id=f"s{slide_index}_speaker",
+            kind=ElementKind.TEXT,
+            role=SlotRole.SPEAKER,
+            box=speaker.box,
+            provenance=Provenance(kind=SourceKind.SLIDE, ref=pattern.id),
+            text=TextContent(paragraphs=[Paragraph(text=line, style=style) for line in lines]),
+        )
+    ]
+
+
 def build_slide_ir(
     spec: TemplateSpec,
     plan_slide: SlidePlan,
@@ -1122,6 +1176,14 @@ def build_slide_ir(
         role = strategy.role_for(block)
         seats = _seat(pattern, block, role, free_slots, taken)
         slot = seats[0][0] if seats else None
+        if slot is None and bookend:
+            # У обложки или финала шаблона нет места под этот текст. Класть
+            # его в свободную полосу поверх оформления нельзя, в подпись
+            # спикера — тоже: это место имени, а не подзаголовка.
+            issues.append(
+                _no_place_issue(plan_slide.index, block.id, _content_area(spec, container))
+            )
+            continue
         if slot is None:
             seats = [(None, lines)]
             box = _free_band(spec, container, homeless, bands, taken)
@@ -1214,6 +1276,9 @@ def build_slide_ir(
                     ),
                 )
             )
+
+    if bookend:
+        elements.extend(_speaker_elements(pattern, pack, plan_slide.index, font_family, spec))
 
     slide = SlideIR(
         index=plan_slide.index,

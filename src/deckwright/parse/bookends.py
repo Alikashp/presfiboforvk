@@ -29,6 +29,7 @@ from deckwright.schemas import (
     Pattern,
     PatternClass,
     Provenance,
+    Repeater,
     Slot,
     SlotRole,
     SourceKind,
@@ -126,6 +127,41 @@ def _inside_mostly(inner: Box, outer: Box) -> bool:
     return width > 0 and height > 0 and width * height >= 0.9 * inner.area
 
 
+def _avatars(slide) -> list[Box]:
+    """Места под фото: круг или картинка, почти квадратные."""
+    found = []
+    for shape in slide.shapes:
+        element = shape._element
+        name = etree.QName(element).localname
+        if not (shape.width and shape.height):
+            continue
+        ratio = shape.width / shape.height
+        if not 0.7 <= ratio <= 1.4:
+            continue
+        round_shape = element.find(f".//{{{A_NS}}}prstGeom[@prst='ellipse']") is not None
+        if name == "pic" or (name == "sp" and round_shape and not _text(element)):
+            found.append(Box(x=shape.left or 0, y=shape.top or 0, w=shape.width, h=shape.height))
+    return found
+
+
+def _beside(avatar: Box, text: Box) -> bool:
+    """Стоит ли фото рядом с текстом: в том же ряду, вплотную слева или справа.
+
+    Так опознаётся подпись спикера — имя и роль рядом с его фото, а не
+    подзаголовок: на обложке `vk_workspace` подзаголовка нет вовсе.
+    """
+    same_row = min(avatar.bottom, text.bottom) - max(avatar.y, text.y) >= 0.5 * min(
+        avatar.h, text.h
+    )
+    gap = max(text.x - avatar.right, avatar.x - text.right)
+    return same_row and gap <= avatar.w and 0.5 <= avatar.h / max(1, text.h) <= 2.0
+
+
+def _union(a: Box, b: Box) -> Box:
+    x, y = min(a.x, b.x), min(a.y, b.y)
+    return Box(x=x, y=y, w=max(a.right, b.right) - x, h=max(a.bottom, b.bottom) - y)
+
+
 def _grown(slots: list[Slot], slide_h: int, decor: list[Box] | None = None) -> list[Slot]:
     """Рамки текста под заголовком — с запасом вниз.
 
@@ -136,7 +172,9 @@ def _grown(slots: list[Slot], slide_h: int, decor: list[Box] | None = None) -> l
     """
     grown = []
     for slot in slots:
-        if slot.role is SlotRole.TITLE:
+        # Заголовок и подпись спикера не растут: под заголовком стоит
+        # подзаголовок, а подпись — это одна-две строки рядом с фото.
+        if slot.role in (SlotRole.TITLE, SlotRole.SPEAKER):
             grown.append(slot)
             continue
         # Рост останавливается у первого места или декора под рамкой, а
@@ -255,7 +293,25 @@ def bookend_pattern(
             slot.box.x,
         )
     )
-    slots = _grown(slots, slide_h, _decor_boxes(slide, slide_w, slide_h))
+    # Места, начинающиеся выше заголовка, — не текст под ним: квадрат
+    # «QR-code» на финале `vk_workspace`. Заглушка сотрётся, опустевший
+    # квадрат уйдёт.
+    slots = [
+        slot.model_copy(update={"role": SlotRole.DECOR})
+        if slot is not main and slot.box.y < main.box.y
+        else slot
+        for slot in slots
+    ]
+    avatars = _avatars(slide)
+    speakers: list[tuple[Slot, Box]] = []
+    marked = []
+    for slot in slots:
+        avatar = next((a for a in avatars if slot is not main and _beside(a, slot.box)), None)
+        if avatar is not None:
+            slot = slot.model_copy(update={"role": SlotRole.SPEAKER})
+            speakers.append((slot, avatar))
+        marked.append(slot)
+    slots = _grown(marked, slide_h, _decor_boxes(slide, slide_w, slide_h))
     if main.style is None:
         slots = [
             slot.model_copy(update={"style": default_style}) if slot.style is None else slot
@@ -267,6 +323,23 @@ def bookend_pattern(
         layout_id=layout_id,
         donor_slide_index=index,
         slots=slots,
+        # Спикер с фото — один элемент: незаполненный рендер уберёт целиком.
+        repeaters=[
+            Repeater(
+                id=f"speaker{index}_{number}",
+                item_slots=[slot],
+                item_box=slot.box,
+                axis="grid",
+                observed_count=1,
+                max_count=1,
+                pitch_emu=max(1, slot.box.w),
+                gutter_emu=0,
+                member_offsets=[(0, 0)],
+                member_frames=[_union(slot.box, avatar)],
+                provenance=Provenance(kind=SourceKind.SLIDE, ref=f"slide{index}"),
+            )
+            for number, (slot, avatar) in enumerate(speakers)
+        ],
         content_area=Box(x=0, y=0, w=slide_w, h=slide_h),
         is_dark=is_dark,
         provenance=Provenance(

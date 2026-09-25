@@ -475,7 +475,15 @@ def _parse(path: Path, font_dir: Path | None) -> TemplateSpec:
             # рендер уберёт целиком, с кружком под фото.
             mined = next((p for p in patterns if p.donor_slide_index == number), None)
             if mined is not None:
-                bookend = bookend.model_copy(update={"repeaters": mined.repeaters})
+                # Одиночный спикер, уже входящий в повторитель слайда, второй
+                # раз не заводится.
+                covered = [frame for r in mined.repeaters for frame in r.member_frames]
+                own = [
+                    r
+                    for r in bookend.repeaters
+                    if not any(_overlap(r.item_box, frame) for frame in covered)
+                ]
+                bookend = bookend.model_copy(update={"repeaters": own + mined.repeaters})
             patterns.append(bookend)
             bookend_ids[kind] = bookend.id
 
@@ -514,6 +522,10 @@ def _parse(path: Path, font_dir: Path | None) -> TemplateSpec:
         recurring=recurring,
         warnings=warnings,
     )
+
+
+def _overlap(a: Box, b: Box) -> bool:
+    return min(a.right, b.right) > max(a.x, b.x) and min(a.bottom, b.bottom) > max(a.y, b.y)
 
 
 def _text_of_member(repeater, dx: int, dy: int) -> Box:

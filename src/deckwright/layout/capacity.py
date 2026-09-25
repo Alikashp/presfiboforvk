@@ -195,7 +195,13 @@ def bookend_limits(spec: TemplateSpec) -> list[tuple[str, int, int]]:
         if pattern is None:
             continue
         title = next((s for s in pattern.slots if s.role is SlotRole.TITLE), None)
-        text = next((s for s in pattern.slots if s.role is not SlotRole.TITLE), None)
+        # Место под текст — только подзаголовок: подпись спикера заполняется
+        # данными о выступающем, а места над заголовком — оформление.
+        text = next((s for s in pattern.slots if s.role is SlotRole.BODY), None)
+        if text is None:
+            # Места под текст нет: планировщику так и говорится — «только
+            # заголовок», а не «текст до N символов».
+            limits.append((f"{prefix}_text", 0, 0))
         for place, slot in (("title", title), ("text", text)):
             if slot is None:
                 continue
