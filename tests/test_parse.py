@@ -441,3 +441,43 @@ def test_translucent_card_is_seen_over_the_slide_background():
     seen = local_backdrop(tree, box, {}, {}, base=Color(rgb="000000"))
     assert seen is not None and seen.luminance < Color(rgb="0077FF").luminance / 3
     assert local_backdrop(tree, box, {}, {}) is None, "фон неизвестен — цвет тоже"
+
+
+def test_cover_skips_the_designers_instruction_slide():
+    """Первый слайд — инструкция дизайнера: обложкой становится титульный.
+
+    Финал — последний разреженный слайд с заголовком в теле, а не в шапке.
+    """
+    from pptx import Presentation as NewPresentation
+    from pptx.util import Emu
+
+    from deckwright.parse.bookends import find_bookends
+
+    deck = NewPresentation()
+    inch = 914400
+    instruction = deck.slides.add_slide(deck.slide_layouts[1])
+    instruction.shapes.title.text = "Как пользоваться шаблоном"
+    instruction.placeholders[1].text_frame.text = "Замените текст. " * 40
+    cover = deck.slides.add_slide(deck.slide_layouts[0])
+    cover.shapes.title.text = "Название презентации"
+    content = deck.slides.add_slide(deck.slide_layouts[5])
+    content.shapes.title.text = "Заголовок в шапке"
+    content.shapes.title.top = Emu(inch // 4)
+    closing = deck.slides.add_slide(deck.slide_layouts[5])
+    closing.shapes.title.text = "Спасибо"
+    closing.shapes.title.top = Emu(3 * inch)
+
+    found = find_bookends(list(deck.slides), deck.slide_height)
+
+    assert found == (2, 4), found
+
+
+def test_bookends_are_kept_out_of_content_layouts(specs):
+    """Обложку и финал берут целиком только титул и финал колоды."""
+    for spec in specs:
+        ids = spec.bookend_ids
+        assert not ids & {pattern.id for pattern in spec.content_patterns}
+        for pattern in spec.patterns:
+            if pattern.id in ids:
+                roles = [slot.role for slot in pattern.slots]
+                assert roles.count(SlotRole.TITLE) == 1, (spec.source_name, pattern.id)

@@ -143,7 +143,7 @@ def _demonstrated_length(spec: TemplateSpec, role: SlotRole) -> int:
         len(slot.placeholder_text.strip())
         for source in (
             (slot for layout in spec.layouts for slot in layout.slots),
-            (slot for pattern in spec.patterns for slot in pattern.slots),
+            (slot for pattern in spec.content_patterns for slot in pattern.slots),
         )
         for slot in source
         if slot.role is role and slot.placeholder_text.strip()
@@ -191,7 +191,7 @@ def _boxes_for(spec: TemplateSpec, role: SlotRole) -> list[Box]:
         return from_layouts
     return [
         slot.box
-        for pattern in spec.patterns
+        for pattern in spec.content_patterns
         for slot in pattern.slots
         if slot.role is role
     ]
@@ -219,7 +219,7 @@ def _slot_size(spec: TemplateSpec, role: SlotRole, position: float) -> float:
         if slot.role is role and slot.style is not None
     ] or [
         slot.style.size_pt
-        for pattern in spec.patterns
+        for pattern in spec.content_patterns
         for slot in pattern.slots
         if slot.role is role and slot.style is not None
     ]

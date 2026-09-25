@@ -21,6 +21,7 @@ from pptx import Presentation
 from pptx.presentation import Presentation as PresentationObject
 
 from deckwright.parse import tokens as tokens_mod
+from deckwright.parse.bookends import bookend_pattern, find_bookends
 from deckwright.parse.fonts import extract_embedded_fonts
 from deckwright.parse.patterns import mine_slide
 from deckwright.parse.recurring import find_recurring
@@ -29,6 +30,7 @@ from deckwright.schemas import (
     Box,
     Color,
     LayoutSpec,
+    PatternClass,
     Provenance,
     Slot,
     SlotRole,
@@ -386,6 +388,7 @@ def _parse(path: Path, font_dir: Path | None) -> TemplateSpec:
     # ── Паттерны со слайдов-примеров ─────────────────────────────────────────
     by_layout_id = {layout.id: layout for layout in layouts}
     patterns = []
+    backdrops: dict[int, Color | None] = {}
     for index, slide in enumerate(prs.slides, start=1):
         layout_id = layout_ids.get(id(slide.slide_layout._element))
         # Фон слайда может перекрывать фон layout'а собственной подложкой.
@@ -443,6 +446,38 @@ def _parse(path: Path, font_dir: Path | None) -> TemplateSpec:
                 }
             )
             patterns.append(classified(pattern, slide_w, slide_h))
+        backdrops[index] = effective
+
+    # ── Обложка и финал ──────────────────────────────────────────────────────
+    slides = list(prs.slides)
+    cover_index, closing_index = find_bookends(slides, slide_h)
+    bookend_ids: dict[PatternClass, str | None] = {}
+    for kind, number in ((PatternClass.TITLE, cover_index), (PatternClass.CLOSING, closing_index)):
+        bookend_ids[kind] = None
+        if number is None:
+            continue
+        slide = slides[number - 1]
+        layout_id = layout_ids.get(id(slide.slide_layout._element))
+        backdrop = backdrops.get(number)
+        bookend = bookend_pattern(
+            slide,
+            number,
+            kind,
+            layout_id,
+            by_layout_id[layout_id].slots if layout_id in by_layout_id else [],
+            base_style,
+            slide_w,
+            slide_h,
+            is_dark=backdrop is not None and backdrop.luminance < 0.5,
+        )
+        if bookend is not None:
+            # Повторители того же слайда — спикеры, контакты: неиспользованный
+            # рендер уберёт целиком, с кружком под фото.
+            mined = next((p for p in patterns if p.donor_slide_index == number), None)
+            if mined is not None:
+                bookend = bookend.model_copy(update={"repeaters": mined.repeaters})
+            patterns.append(bookend)
+            bookend_ids[kind] = bookend.id
 
     slide_count = len(prs.slides._sldIdLst)
     if slide_count and len(patterns) / slide_count < 0.5:
@@ -474,6 +509,8 @@ def _parse(path: Path, font_dir: Path | None) -> TemplateSpec:
         masters=masters,
         layouts=layouts,
         patterns=patterns,
+        cover_pattern_id=bookend_ids[PatternClass.TITLE],
+        closing_pattern_id=bookend_ids[PatternClass.CLOSING],
         recurring=recurring,
         warnings=warnings,
     )

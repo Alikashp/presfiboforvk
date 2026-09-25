@@ -41,7 +41,6 @@ from deckwright.schemas import (
     DeckIR,
     Element,
     ElementKind,
-    SlotRole,
     TemplateSpec,
     TextStyle,
 )
@@ -112,16 +111,44 @@ def _fill_text_frame(text_frame, element: Element, *, styled: bool) -> None:
             target.line_spacing = 1.0
 
 
-def _placeholder_by_role(slide, role: SlotRole):
-    """Плейсхолдер слайда под нужную роль, если такой есть."""
-    wanted = {"title", "ctrTitle"} if role is SlotRole.TITLE else {"subTitle"}
-    if role not in (SlotRole.TITLE, SlotRole.SUBTITLE):
-        return None
+def _placeholder_at(slide, box: Box):
+    """Плейсхолдер слайда, стоящий ровно в этой рамке — своей или унаследованной.
+
+    Рамку плейсхолдер часто не держит сам, а наследует с layout'а: так
+    устроены обложки и финалы шаблонов, и по списку фигур с рамками их не
+    найти.
+    """
     for shape in slide.placeholders:
         ph = shape._element.xpath(".//*[local-name()='ph']")
-        if ph and ph[0].get("type", "body") in wanted:
+        if ph and ph[0].get("type", "body") in _TEMPLATE_PLACEHOLDERS:
+            continue
+        if not shape.has_text_frame:
+            continue
+        own = _shape_box_of(shape)
+        if _same_box(own, box):
+            return shape
+        # Рамка, выросшая вниз под наш текст (подзаголовок обложки): тот же
+        # плейсхолдер, и рамка ему задаётся явно.
+        if _same_box(own, box.model_copy(update={"h": own.h})) and box.h > own.h:
+            shape.left, shape.top, shape.width, shape.height = box.x, box.y, box.w, box.h
             return shape
     return None
+
+
+def _keep_fitted_size(text_frame, element: Element) -> None:
+    """Кегль плейсхолдера — шаблонный, если фиттеру не пришлось его уменьшать.
+
+    Уменьшил — значит, шаблонным кеглем текст не влезает, и кегль фиттера
+    записывается явно; всё остальное оформление остаётся шаблонным.
+    """
+    if element.text is None or not element.text.scale_steps_down:
+        return
+    size = Pt(element.text.paragraphs[0].style.size_pt)
+    for paragraph in text_frame.paragraphs:
+        # Интервал — тот, которым мерил фиттер, как и у прочего нашего текста.
+        paragraph.line_spacing = 1.0
+        for run in paragraph.runs:
+            run.font.size = size
 
 
 # Насколько рамка клона может разойтись с рамкой слота, чтобы всё ещё считаться
@@ -186,6 +213,13 @@ def _take_matching_shape(candidates: list[tuple[Box, object]], box: Box):
         if _same_box(shape_box_, box):
             candidates.pop(index)
             return shape
+    # Рамка, выросшая вниз под наш текст (обложка, финал): та же фигура, выше.
+    for index, (shape_box_, shape) in enumerate(candidates):
+        taller = box.h > shape_box_.h
+        if taller and _same_box(shape_box_, box.model_copy(update={"h": shape_box_.h})):
+            candidates.pop(index)
+            shape.height = shape.height + (box.h - shape_box_.h)
+            return shape
     return None
 
 
@@ -231,9 +265,10 @@ def _render_element(
         _fill_text_frame(target.text_frame, element, styled=True)
         return element.box
 
-    placeholder = _placeholder_by_role(slide, element.role)
-    if placeholder is not None and _same_box(_shape_box_of(placeholder), element.box):
+    placeholder = _placeholder_at(slide, element.box)
+    if placeholder is not None:
         _fill_text_frame(placeholder.text_frame, element, styled=False)
+        _keep_fitted_size(placeholder.text_frame, element)
         return element.box
 
     box = element.box
@@ -272,7 +307,11 @@ def _drop_unfilled_placeholders(slide, filled: list[Box]) -> None:
         ph = shape._element.xpath(".//*[local-name()='ph']")
         if ph and ph[0].get("type", "body") in _TEMPLATE_PLACEHOLDERS:
             continue
-        if any(_same_box(_shape_box_of(shape), box) for box in filled):
+        # Пустой плейсхолдер уходит, даже если стоит на занятом месте: это
+        # дубль, пришедший с layout'а рядом с клоном донора, — в редакторе он
+        # просит «вставить заголовок» поверх нашего.
+        empty = not (shape.has_text_frame and shape.text_frame.text.strip())
+        if not empty and any(_same_box(_shape_box_of(shape), box) for box in filled):
             continue
         shape._element.getparent().remove(shape._element)
 
