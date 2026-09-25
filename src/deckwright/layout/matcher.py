@@ -494,6 +494,23 @@ def _title_slot(container):
     return None
 
 
+def _bookend(spec: TemplateSpec, plan_slide: SlidePlan) -> Pattern | None:
+    """Обложка шаблона для титула, его финал — для финала.
+
+    Их берут целиком: первый и последний слайды колоды — это титул и финал
+    самого шаблона, меняется только текст. Финала в шаблоне нет — финалом
+    служит обложка.
+    """
+    by_id = {pattern.id: pattern for pattern in spec.patterns}
+    if plan_slide.intent is SlideIntent.TITLE:
+        wanted = spec.cover_pattern_id
+    elif plan_slide.intent is SlideIntent.CLOSING:
+        wanted = spec.closing_pattern_id or spec.cover_pattern_id
+    else:
+        return None
+    return by_id.get(wanted) if wanted else None
+
+
 def pick_layout(spec: TemplateSpec, plan_slide: SlidePlan) -> LayoutSpec:
     """Запасной путь: layout, чья структура не противоречит намерению."""
     if not spec.layouts:
@@ -983,7 +1000,7 @@ def build_slide_ir(
     avoid: set[str] | None = None,
 ) -> tuple[SlideIR, list[Issue]]:
     """Один слайд: композиция шаблона, заполненная содержанием плана."""
-    pattern = pick_pattern(
+    pattern = _bookend(spec, plan_slide) or pick_pattern(
         spec, plan_slide, strategy, used, metrics, ladders[SlotRole.TITLE], ladders, avoid
     )
     layout = pick_layout(spec, plan_slide)
@@ -1070,8 +1087,14 @@ def build_slide_ir(
     )
 
     # ── Содержание ───────────────────────────────────────────────────────
+    bookend = pattern is not None and pattern.id in spec.bookend_ids
     free_slots = (
-        _usable_slots(pattern, spec.slide_width_emu, spec.slide_height_emu)
+        # У обложки и финала порядок мест задал разбор: заголовок, под ним
+        # подзаголовок и контакты. Порядок чтения отдал бы текст квадрату
+        # под QR-код над заголовком.
+        [slot for slot in pattern.slots if slot.role in _CONTENT_ROLES]
+        if bookend
+        else _usable_slots(pattern, spec.slide_width_emu, spec.slide_height_emu)
         if pattern is not None
         else [
             slot
@@ -1080,7 +1103,10 @@ def build_slide_ir(
             and _on_slide(slot.box, spec.slide_width_emu, spec.slide_height_emu)
         ]
     )
-    free_slots = _fill_share(pattern, free_slots, strategy)
+    # На обложке и финале доля мест не режется: мест там два-три, и все они
+    # — места шаблона под название, подзаголовок и контакты.
+    if not bookend:
+        free_slots = _fill_share(pattern, free_slots, strategy)
 
     # Сколько блоков уже не нашли себе слота: каждому следующему достаётся
     # своя полоса свободной области, иначе они лягут друг на друга.
@@ -1315,7 +1341,8 @@ def _slides_for(
         for issue in issues
         if issue.check_id == "layout.text_overflow" and title_id not in issue.element_ids
     ]
-    if not content_overflow:
+    # Обложку и финал не делят: вторая обложка — не выход.
+    if not content_overflow or slide.pattern_id in spec.bookend_ids:
         return [slide], issues
 
     parts = split_blocks(list(plan_slide.blocks))

@@ -375,6 +375,10 @@ class TemplateSpec(BaseModel):
     masters: list[str] = Field(default_factory=list)
     layouts: list[LayoutSpec] = Field(default_factory=list)
     patterns: list[Pattern] = Field(default_factory=list)
+    # Обложка и финал шаблона: колода берёт их целиком и меняет только текст.
+    # В обычный подбор композиций они не входят.
+    cover_pattern_id: str | None = None
+    closing_pattern_id: str | None = None
     recurring: list[RecurringElement] = Field(default_factory=list)
 
     # Что не удалось разобрать. Пустой список — не признак успеха, а признак
@@ -394,6 +398,26 @@ class TemplateSpec(BaseModel):
     def patterns_of(self, pattern_class: PatternClass) -> list[Pattern]:
         return [p for p in self.patterns if p.pattern_class is pattern_class]
 
+    @property
+    def bookend_ids(self) -> set[str]:
+        return {pid for pid in (self.cover_pattern_id, self.closing_pattern_id) if pid}
+
+    @property
+    def content_patterns(self) -> list[Pattern]:
+        """Композиции для содержательных слайдов — без обложки и финала.
+
+        И без других композиций с тех же слайдов: иначе дизайн финала
+        («Спасибо» с 3D-картинкой на `vk_tech`) доставался слайду с
+        призывом к действию, и колода кончалась двумя финалами.
+        """
+        ids = self.bookend_ids
+        donors = {p.donor_slide_index for p in self.patterns if p.id in ids}
+        return [
+            pattern
+            for pattern in self.patterns
+            if pattern.id not in ids and pattern.donor_slide_index not in donors
+        ]
+
     def patterns_matching(
         self,
         needed: dict[SlotRole, int],
@@ -411,7 +435,7 @@ class TemplateSpec(BaseModel):
         опознают около двенадцати процентов композиций; выбрасывать их значит
         добровольно обеднить вёрстку на восьмую часть.
         """
-        candidates = [pattern for pattern in self.patterns if pattern.fits(needed)]
+        candidates = [pattern for pattern in self.content_patterns if pattern.fits(needed)]
 
         def rank(pattern: Pattern) -> tuple[int, float, int]:
             class_match = 0 if (preferred and pattern.pattern_class is preferred) else 1

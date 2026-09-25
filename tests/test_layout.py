@@ -625,3 +625,20 @@ def test_list_is_spread_over_the_cards_one_item_each():
                   _usable_slots(pattern, 10 * inch, int(5.625 * inch)), [title.box])
     assert seats is not None
     assert [len(lines) for _, lines in seats] == [2, 2, 1, 1]
+
+
+def test_title_and_closing_use_the_templates_own_slides(specs, plan):
+    """Первый и последний слайды колоды — обложка и финал шаблона."""
+    from deckwright.schemas import SlideIntent
+
+    cfg = load_config(CONFIG)
+    for name, spec in specs:
+        if spec.cover_pattern_id is None:
+            continue
+        deck, _ = build_deck_ir(spec, plan, cfg.variant("balanced"))
+        for slide, plan_slide in zip(deck.slides, plan.slides, strict=False):
+            if plan_slide.intent is SlideIntent.TITLE:
+                assert slide.pattern_id == spec.cover_pattern_id, name
+            if plan_slide.intent is SlideIntent.CLOSING:
+                wanted = spec.closing_pattern_id or spec.cover_pattern_id
+                assert slide.pattern_id == wanted, name

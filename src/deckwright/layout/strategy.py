@@ -82,7 +82,7 @@ def scale_ladder(spec: TemplateSpec) -> list[float]:
         for slot in layout.slots:
             if slot.style is not None:
                 sizes.add(slot.style.size_pt)
-    for pattern in spec.patterns:
+    for pattern in spec.content_patterns:
         for slot in pattern.slots:
             if slot.style is not None:
                 sizes.add(slot.style.size_pt)
@@ -95,10 +95,10 @@ def _declared_sizes(spec: TemplateSpec, role: SlotRole) -> list[float]:
         slot.style.size_pt
         for source in (
             (slot for layout in spec.layouts for slot in layout.slots),
-            (slot for pattern in spec.patterns for slot in pattern.slots),
+            (slot for pattern in spec.content_patterns for slot in pattern.slots),
             (
                 slot
-                for pattern in spec.patterns
+                for pattern in spec.content_patterns
                 for repeater in pattern.repeaters
                 for slot in repeater.item_slots
             ),

@@ -101,7 +101,7 @@ def achievable(
     title = _text(max(1, round(title_chars * 0.7)))
     usable = [
         pattern
-        for pattern in spec.patterns
+        for pattern in spec.content_patterns
         if _usable_slots(pattern, spec.slide_width_emu, spec.slide_height_emu)
     ]
 

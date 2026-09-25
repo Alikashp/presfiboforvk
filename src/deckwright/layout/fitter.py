@@ -125,16 +125,20 @@ def fit_size(
                 steps_down=steps_down,
                 overflow_emu=0,
                 lines=lines,
+                capacity_lines=capacity_lines(metrics, size, box, line_height),
             )
         last_height, last_lines = height, lines
 
     smallest = steps[0]
+    # Ёмкость — и у заголовка: без неё находка говорила «помещается 0
+    # строк», и совет сократить был без числа.
     return FitResult(
         size_pt=smallest,
         fits=False,
         steps_down=len(steps) - 1,
         overflow_emu=last_height - usable_height,
         lines=last_lines,
+        capacity_lines=capacity_lines(metrics, smallest, box, line_height),
     )
 
 
