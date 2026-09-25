@@ -179,6 +179,30 @@ def _master_sizes_pt(master) -> dict[str, float]:
     return sizes
 
 
+def _master_placeholder_size_pt(master, element: etree._Element) -> float | None:
+    """Кегль плейсхолдера мастера того же типа — звено наследования OOXML.
+
+    Цепочка такая: плейсхолдер слайда → макета → **плейсхолдера мастера** →
+    `p:txStyles` мастера. Среднее звено раньше пропускалось, и у
+    `vk_education` (экспорт из Google Slides) заголовок получал 14 pt из
+    `titleStyle`, хотя плейсхолдер заголовка в мастере набран 36 pt — так
+    он и рисуется. Бюджет длины заголовка при этом завышался вдвое с лишним.
+    Берётся первый уровень: он и есть кегль самого заголовка.
+    """
+    ph = element.find(f".//{{{P_NS}}}ph")
+    wanted = ph.get("type", "body") if ph is not None else "body"
+    for shape in master.placeholders:
+        node = shape._element.find(f".//{{{P_NS}}}ph")
+        kind = node.get("type", "body") if node is not None else "body"
+        if _PH_ROLE.get(kind) is not _PH_ROLE.get(wanted):
+            continue
+        level = shape._element.find(f".//{{{A_NS}}}lvl1pPr/{{{A_NS}}}defRPr")
+        if level is not None and level.get("sz"):
+            return int(level.get("sz")) / 100
+        return _slot_size_pt(shape._element)
+    return None
+
+
 def _layout_slots(
     layout,
     style: TextStyle,
@@ -196,8 +220,10 @@ def _layout_slots(
         fmt = shape.placeholder_format
         color = _text_color(shape._element, theme, clr_map) or fallback
         role = _placeholder_role(shape._element)
-        size = _slot_size_pt(shape._element) or master_sizes.get(
-            _MASTER_STYLE_BY_ROLE.get(role, "otherStyle")
+        size = (
+            _slot_size_pt(shape._element)
+            or _master_placeholder_size_pt(layout.slide_master, shape._element)
+            or master_sizes.get(_MASTER_STYLE_BY_ROLE.get(role, "otherStyle"))
         )
         updates = {"color": color}
         if size:
@@ -376,8 +402,29 @@ def _parse(path: Path, font_dir: Path | None) -> TemplateSpec:
             layout_id,
             base_style,
             is_dark=effective is not None and effective.luminance < 0.5,
+            inherited_slots=(
+                {slot.role: slot for slot in by_layout_id[layout_id].slots}
+                if layout_id in by_layout_id
+                else None
+            ),
         )
         if pattern is not None:
+            # Локальный фон каждого слота: на чём лежит текст этого места.
+            tree = slide.shapes._spTree
+            pattern = pattern.model_copy(
+                update={
+                    "slots": [
+                        slot.model_copy(
+                            update={
+                                "backdrop": tokens_mod.local_backdrop(
+                                    tree, slot.box, theme, primary_map
+                                )
+                            }
+                        )
+                        for slot in pattern.slots
+                    ]
+                }
+            )
             patterns.append(classified(pattern, slide_w, slide_h))
 
     slide_count = len(prs.slides._sldIdLst)
@@ -415,6 +462,21 @@ def _parse(path: Path, font_dir: Path | None) -> TemplateSpec:
     )
 
 
+def _parser_fingerprint() -> str:
+    """Отпечаток исходников разбора: правка парсера сбрасывает кэш сама.
+
+    Раньше ключом кэша был только хэш файла шаблона, и исправленный разбор
+    молча не применялся к уже разобранным шаблонам — ни у разработчика, ни в
+    CI с сохранённым кэшем. Ручной номер версии забывают поднять; отпечаток
+    исходников не забывает.
+    """
+    digest = hashlib.sha256()
+    package = Path(__file__).resolve().parent
+    for source in sorted(package.glob("*.py")):
+        digest.update(source.read_bytes())
+    return digest.hexdigest()[:12]
+
+
 def parse_template(
     path: str | Path,
     cache_dir: str | Path | None = None,
@@ -425,7 +487,7 @@ def parse_template(
     cache_path: Path | None = None
 
     if cache_dir is not None:
-        cache_path = Path(cache_dir) / f"{file_sha256(path)}.json"
+        cache_path = Path(cache_dir) / f"{file_sha256(path)}-{_parser_fingerprint()}.json"
         if cache_path.exists():
             try:
                 return TemplateSpec.model_validate_json(cache_path.read_text("utf-8"))

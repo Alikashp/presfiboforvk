@@ -7,9 +7,14 @@
 
 Здесь бюджет считается тем же предсказателем, по которому вёрстка потом
 выбирает макет (`matcher._blocks_fit`): для каждого вида текстового блока —
-сколько пунктов заданной длины помещается **читаемым кеглем** хотя бы в один
+сколько пунктов какой длины помещается **читаемым кеглем** хотя бы в один
 макет шаблона. Считается для каждого варианта, и берётся минимум: план один
 на три варианта, и влезать он обязан во все три.
+
+Ёмкость — кривая, а не одно число: на `vk_workspace` помещается три пункта
+по 70 символов, пять по 50 или шесть по 25. Одна пара «шесть по 22»
+заставляла модель резать типичный список из четырёх пунктов втрое; кривая
+оставляет выбор ей.
 
 Расчёт детерминирован и не зовёт модель; планировщику уходят только числа.
 """
@@ -36,12 +41,13 @@ TEXT_KINDS = (BlockKind.BULLETS, BlockKind.STEPS, BlockKind.PARAGRAPH)
 
 # Длины пункта, которые пробуются от бюджета шаблона вниз: если пять пунктов
 # полной длины не влезают никуда, три коротких могут влезть.
-_LENGTH_STEPS = (1.0, 0.75, 0.5)
-# Абзац пробуется от «весь бюджет тела» до одной строки пункта.
-_PARAGRAPH_STEPS = (1.0, 0.75, 0.5, 0.33, 0.25, 1 / 6)
-
 # Модельное слово: средняя длина русского слова около семи букв.
 _WORD = "абвгдеж"
+
+# Предел длины пункта при поиске: порог ТЗ — пятнадцать слов, это около
+# ста десяти символов русского текста.
+_MAX_ITEM_CHARS = 110
+_MIN_ITEM_CHARS = 10
 
 
 @dataclass(frozen=True)
@@ -77,11 +83,15 @@ def achievable(
     item_chars: int,
     title_chars: int,
     max_items: int,
-) -> dict[BlockKind, BlockCapacity]:
-    """Ёмкость по видам текстовых блоков, общая для всех вариантов.
+) -> dict[BlockKind, list[BlockCapacity]]:
+    """Кривая ёмкости по видам текстовых блоков, общая для всех вариантов.
 
-    `item_chars`, `title_chars` и `max_items` — бюджет шаблона и порог ТЗ:
-    ёмкость не бывает больше них, только меньше.
+    Для каждого числа пунктов от одного до порога ТЗ — наибольшая длина
+    пункта, при которой блок влезает во всех вариантах. Из кривой остаются
+    точки, где длина падает: «три по 70, пять по 50, шесть по 25».
+
+    `item_chars` — бюджет шаблона: он нужен абзацу и как нижняя граница,
+    если читаемым кеглем не влезает ничего.
     """
     metrics = metrics_for_spec(spec).metrics
     if metrics is None or not strategies:
@@ -95,38 +105,64 @@ def achievable(
         if _usable_slots(pattern, spec.slide_width_emu, spec.slide_height_emu)
     ]
 
-    def fits(kind, items, chars, strategy, strict) -> bool:
+    def fits(kind, items, chars, strict) -> bool:
         slide = _probe(kind, items, chars, title)
-        return any(
-            _title_fits(pattern, slide, strategy, metrics, ladders[SlotRole.TITLE])
-            and _blocks_fit(pattern, spec, slide, strategy, metrics, ladders, strict)
-            for pattern in usable
+        return all(
+            any(
+                _title_fits(pattern, slide, strategy, metrics, ladders[SlotRole.TITLE])
+                and _blocks_fit(pattern, spec, slide, strategy, metrics, ladders, strict)
+                for pattern in usable
+            )
+            for strategy in strategies
         )
 
-    def measure(kind: BlockKind, strict) -> BlockCapacity:
-        single = kind is BlockKind.PARAGRAPH
-        ceiling = 1 if single else max_items
-        steps = _PARAGRAPH_STEPS if single else _LENGTH_STEPS
-        best = BlockCapacity(items=0, chars=0)
-        for step in steps:
-            chars = max(10, round(item_chars * step * (max_items if single else 1)))
-            items = 0
-            for count in range(1, ceiling + 1):
-                if all(fits(kind, count, chars, st, strict) for st in strategies):
-                    items = count
-                else:
-                    break
-            if items * chars > best.items * best.chars:
-                best = BlockCapacity(items=items, chars=chars)
-            if items >= ceiling:
-                break
-        return best
+    def longest(kind, items, strict, ceiling) -> int:
+        """Наибольшая влезающая длина — двоичным поиском: ёмкость монотонна."""
+        low, high, found = _MIN_ITEM_CHARS, ceiling, 0
+        while low <= high:
+            middle = (low + high) // 2
+            if fits(kind, items, middle, strict):
+                found, low = middle, middle + 1
+            else:
+                high = middle - 1
+        return found
 
-    result: dict[BlockKind, BlockCapacity] = {}
+    def curve(kind: BlockKind, strict) -> list[BlockCapacity]:
+        if kind is BlockKind.PARAGRAPH:
+            chars = longest(kind, 1, strict, max(_MAX_ITEM_CHARS, item_chars * max_items))
+            return [BlockCapacity(items=1, chars=chars)] if chars else []
+        points: list[BlockCapacity] = []
+        ceiling = _MAX_ITEM_CHARS
+        for count in range(1, max_items + 1):
+            # Больше пунктов — длина не растёт. Сначала проверяется прежняя:
+            # у просторного шаблона кривая плоская, и поиск не нужен вовсе.
+            if points and fits(kind, count, ceiling, strict):
+                chars = ceiling
+            else:
+                chars = longest(kind, count, strict, ceiling - 1 if points else ceiling)
+            if not chars:
+                break
+            ceiling = chars
+            # Пока длина не падает, больше пунктов — даром: точку заменяем.
+            if points and points[-1].chars == chars:
+                points[-1] = BlockCapacity(items=count, chars=chars)
+            else:
+                points.append(BlockCapacity(items=count, chars=chars))
+        return points
+
+    result: dict[BlockKind, list[BlockCapacity]] = {}
+    by_roles: dict[tuple, list[BlockCapacity]] = {}
     for kind in TEXT_KINDS:
-        # Сначала — сколько влезает читаемым кеглем; если так не влезает
-        # ничего, — сколько влезает хоть как-то. Ноль остаётся нулём: тогда
-        # планировщик получает общий бюджет шаблона, как раньше.
-        found = measure(kind, typical)
-        result[kind] = found if found.items else measure(kind, None)
+        # Виды блоков, которые во всех вариантах ложатся в одну роль слота,
+        # имеют одну кривую: считать её дважды — лишние секунды.
+        roles = tuple(
+            strategy.role_for(ContentBlock(id="k", kind=kind, items=["x"]))
+            for strategy in strategies
+        ) + ((kind,) if kind is BlockKind.PARAGRAPH else ())
+        if roles not in by_roles:
+            # Сначала — читаемым кеглем; если так не влезает ничего, — хоть
+            # как-то. Пустая кривая остаётся пустой: тогда в промпт уходит
+            # общий бюджет шаблона.
+            by_roles[roles] = curve(kind, typical) or curve(kind, None)
+        result[kind] = by_roles[roles]
     return result

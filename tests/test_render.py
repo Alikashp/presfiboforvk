@@ -238,3 +238,23 @@ def test_nothing_of_the_donor_shows_through_a_chart():
     assert ours.shape_id in left, "убран наш собственный текст"
     assert card.shape_id in left, "убрана подложка, которая больше графика"
     assert removed == 2 and candidates == []
+
+
+def test_text_inside_a_group_is_filled_or_cleared():
+    """Текст в группе — такая же фигура донора, как и снаружи.
+
+    Раньше брался только верхний уровень, и подсказка дизайнера в группе
+    («Опишите преимущества…» на `vk_education`) доезжала до колоды.
+    """
+    from pptx.util import Emu
+
+    from deckwright.render.pptx_writer import _text_shapes
+
+    presentation = Presentation()
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+    group = slide.shapes.add_group_shape()
+    inner = group.shapes.add_textbox(Emu(914400), Emu(914400), Emu(914400 * 3), Emu(914400))
+    inner.text_frame.text = "Опишите преимущества"
+
+    found = [shape for _, shape in _text_shapes(slide)]
+    assert any(shape.shape_id == inner.shape_id for shape in found)

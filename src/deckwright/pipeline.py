@@ -173,7 +173,11 @@ def plan_limits(spec: TemplateSpec, cfg: Config) -> tuple[tuple[str, int, int], 
         title_chars=hint.title_chars,
         max_items=cfg.audit.max_bullets_per_slide,
     )
-    return tuple((kind.value, cap.items, cap.chars) for kind, cap in capacity.items())
+    return tuple(
+        (kind.value, point.items, point.chars)
+        for kind, curve in capacity.items()
+        for point in curve
+    )
 
 
 def _step_params(model_cfg, steps: tuple[str, ...]) -> dict[str, dict[str, object]]:

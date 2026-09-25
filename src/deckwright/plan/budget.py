@@ -58,38 +58,45 @@ class LengthBudget:
     # которому потом выбирает макет; здесь это только числа.
     block_limits: tuple[tuple[str, int, int], ...] = ()
 
-    def limit_for(self, kind: str) -> tuple[int, int] | None:
-        for name, items, chars in self.block_limits:
-            if name == kind and items:
-                return items, chars
-        return None
+    def curve_for(self, kind: str) -> list[tuple[int, int]]:
+        """Точки ёмкости вида блока: [(пунктов, символов в пункте), …]."""
+        return [(items, chars) for name, items, chars in self.block_limits if name == kind]
+
+    @staticmethod
+    def _curve_text(curve: list[tuple[int, int]], forms: tuple[str, str, str]) -> str:
+        """«1–2 пункта до 110 символов; 3 пункта до 74; 4–5 пунктов до 50»."""
+        parts, previous = [], 0
+        for items, chars in curve:
+            span = f"{previous + 1}–{items}" if items > previous + 1 else f"{items}"
+            parts.append(f"{span} {_plural(items, forms)} до {chars} символов")
+            previous = items
+        return "; ".join(parts)
 
     def as_prompt_lines(self) -> str:
         """Ограничения в том виде, в каком они уходят в промпт.
 
         Если ёмкость макетов известна, она заменяет общий порог «до шести
         пунктов»: живой план #12 этому порогу подчинился и всё равно
-        переполнил 37 слайдов из 90 — рамки вмещали от одной до четырёх строк.
+        переполнил 37 слайдов из 90. Ёмкость — кривая: чем меньше пунктов,
+        тем длиннее каждый, и выбор между ними остаётся модели.
         """
         lines = [
             f"- заголовок слайда: не длиннее {self.title_chars} символов",
             f"- подзаголовок: не длиннее {self.subtitle_chars} символов",
         ]
-        listed = self.limit_for("bullets")
-        steps = self.limit_for("steps")
-        paragraph = self.limit_for("paragraph")
+        listed = self.curve_for("bullets")
+        steps = self.curve_for("steps")
+        paragraph = self.curve_for("paragraph")
         if listed:
             lines.append(
-                f"- список (bullets): не больше {listed[0]} пунктов, каждый не длиннее "
-                f"{listed[1]} символов и {self.max_words_per_bullet} слов"
+                "- список (bullets), в пункте не больше "
+                f"{self.max_words_per_bullet} слов: "
+                + self._curve_text(listed, ("пункт", "пункта", "пунктов"))
             )
         if steps:
-            lines.append(
-                f"- шаги (steps): не больше {steps[0]} шагов, каждый не длиннее "
-                f"{steps[1]} символов"
-            )
+            lines.append("- шаги (steps): " + self._curve_text(steps, ("шаг", "шага", "шагов")))
         if paragraph:
-            lines.append(f"- абзац (paragraph): не длиннее {paragraph[1]} символов")
+            lines.append(f"- абзац (paragraph): не длиннее {paragraph[-1][1]} символов")
         if not listed:
             lines.append(
                 f"- пункт списка: не длиннее {self.bullet_chars} символов "
@@ -98,10 +105,24 @@ class LengthBudget:
             lines.append(f"- пунктов на слайде: не больше {self.max_bullets}")
         else:
             lines.append(
-                "- больше пунктов, чем сказано, в блок не помещается: разнеси "
-                "содержание на два слайда или оставь главное"
+                "- длиннее или больше, чем сказано, в блок не помещается: выбери "
+                "число пунктов под свой текст, разнеси содержание на два слайда "
+                "или оставь главное"
             )
         return "\n".join(lines)
+
+
+def _plural(number: int, forms: tuple[str, str, str]) -> str:
+    """Форма слова после числа: 1 пункт, 3 пункта, 5 пунктов."""
+    tail = number % 100
+    if 11 <= tail <= 14:
+        return forms[2]
+    last = number % 10
+    if last == 1:
+        return forms[0]
+    if 2 <= last <= 4:
+        return forms[1]
+    return forms[2]
 
 
 def _demonstrated_length(spec: TemplateSpec, role: SlotRole) -> int:
