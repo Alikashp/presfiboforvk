@@ -694,3 +694,177 @@ def test_value_label_drops_the_unit_rather_than_wrapping(specs):
         narrow = Box(x=0, y=0, w=int(1.2 * inch), h=2 * inch)
         size, unit = _value_label(narrow, ["a", "b", "c", "d", "e"], [42.0] * 5, "мин", 14.0, spec)
         assert unit == "" and size >= 10.0
+
+
+def _cards_pattern(count: int, *, baked: bool = False, placeholder: str = ""):
+    """Композиция: заголовок и `count` карточек-повторителя в ряд."""
+    from deckwright.schemas import Pattern, PatternClass, Provenance, Repeater, Slot, SourceKind
+
+    inch = 914400
+    here = Provenance(kind=SourceKind.SLIDE, ref="test")
+    body = Slot(id="b", role=SlotRole.BODY, box=Box(x=inch, y=inch, w=2 * inch, h=2 * inch),
+                placeholder_text=placeholder, provenance=here)
+    pitch = 2 * inch + inch // 4
+    cards = Repeater(
+        id="rep", item_slots=[body], item_box=body.box, observed_count=count,
+        max_count=count, pitch_emu=pitch, gutter_emu=inch // 4,
+        member_offsets=[(n * pitch, 0) for n in range(count)], provenance=here,
+    )
+    title = Slot(id="t", role=SlotRole.TITLE, box=Box(x=inch, y=0, w=8 * inch, h=inch // 2),
+                 provenance=here)
+    return Pattern(
+        id="p", pattern_class=PatternClass.GRID, donor_slide_index=1, slots=[title],
+        repeaters=[cards], content_area=Box(x=0, y=0, w=10 * inch, h=5 * inch),
+        baked_items=baked, provenance=here,
+    )
+
+
+def _one_slide(items: list[str]):
+    from deckwright.schemas import BlockKind, ContentBlock, SlideIntent, SlidePlan
+
+    return SlidePlan(
+        index=2, intent=SlideIntent.SOLUTION, takeaway_title="Заголовок",
+        blocks=[ContentBlock(id="b1", kind=BlockKind.BULLETS, items=items)],
+    )
+
+
+class _Spec:
+    slide_width_emu = 10 * 914400
+    slide_height_emu = int(5.625 * 914400)
+
+
+def test_cards_drawn_in_the_layout_are_filled_or_not_chosen():
+    """Карточки «01–04» нарисованы в картинке layout'а: пустую не убрать.
+
+    Три пункта на четыре нарисованные карточки оставляют «04» пустой —
+    такую композицию не берут. Четыре пункта — берут. Обычные карточки
+    рендер убирает сам, им лишняя не мешает.
+    """
+    from deckwright.layout.matcher import _unsuitable
+
+    strategy = Strategy.from_config(load_config(CONFIG).variant("balanced"))
+    three, four = _one_slide(["а", "б", "в"]), _one_slide(["а", "б", "в", "г"])
+    assert _unsuitable(_cards_pattern(4, baked=True), _Spec, three, strategy)
+    assert not _unsuitable(_cards_pattern(4, baked=True), _Spec, four, strategy)
+    assert not _unsuitable(_cards_pattern(4), _Spec, three, strategy)
+
+
+def test_list_does_not_go_into_one_of_several_twin_frames():
+    """Пять одинаковых рамок, не опознанных повтором: список в одной — нет.
+
+    `vk_tech` dense 9 до этой правки: три пункта мелко в первой карточке,
+    четыре таких же рядом пустые.
+    """
+    from deckwright.layout.matcher import _unsuitable
+    from deckwright.schemas import Pattern, PatternClass, Provenance, Slot, SourceKind
+
+    inch = 914400
+    here = Provenance(kind=SourceKind.SLIDE, ref="test")
+    frames = [
+        Slot(id=f"f{n}", role=SlotRole.BODY,
+             box=Box(x=inch // 2 + n * 2 * inch, y=inch, w=int(1.8 * inch), h=inch),
+             provenance=here)
+        for n in range(4)
+    ]
+    title = Slot(id="t", role=SlotRole.TITLE, box=Box(x=inch, y=0, w=8 * inch, h=inch // 2),
+                 provenance=here)
+    pattern = Pattern(
+        id="p", pattern_class=PatternClass.KPI_ROW, donor_slide_index=1,
+        slots=[title, *frames], content_area=Box(x=0, y=0, w=10 * inch, h=5 * inch),
+        provenance=here,
+    )
+    strategy = Strategy.from_config(load_config(CONFIG).variant("dense"))
+    assert _unsuitable(pattern, _Spec, _one_slide(["а", "б", "в"]), strategy)
+    # Абзац — не список: ему одна рамка законна.
+    assert not _unsuitable(pattern, _Spec, _one_slide(["один абзац"]), strategy)
+
+
+def test_text_on_an_illustration_takes_no_more_lines_than_the_donor():
+    """Рамка текста накрывает картинку, а донор писал в ней две строки.
+
+    Ниже двух строк — рисунок (шар `vk_tech`): три пункта легли бы на него.
+    """
+    from deckwright.layout.matcher import _on_picture
+    from deckwright.schemas import Pattern, PatternClass, Provenance, Slot, SourceKind
+
+    inch = 914400
+    here = Provenance(kind=SourceKind.SLIDE, ref="test")
+    picture = Slot(id="i", role=SlotRole.IMAGE, box=Box(x=0, y=inch, w=4 * inch, h=4 * inch),
+                   provenance=here)
+    text = Slot(id="x", role=SlotRole.BODY,
+                box=Box(x=inch // 4, y=inch + inch // 4, w=3 * inch, h=3 * inch),
+                placeholder_text="Тестирование оборудования\nи софта до покупки", provenance=here)
+    pattern = Pattern(
+        id="p", pattern_class=PatternClass.GRID, donor_slide_index=1, slots=[picture, text],
+        content_area=Box(x=0, y=0, w=10 * inch, h=5 * inch), provenance=here,
+    )
+    assert _on_picture(text, pattern, 3)
+    assert not _on_picture(text, pattern, 2)
+
+
+def test_readable_threshold_is_reachable_in_every_variant(specs):
+    """Порог «не ниже типичного» — ступень под типичным, общая для вариантов.
+
+    Ровно типичный кегль плотный вариант не набирает никогда: он стартует
+    на ступень ниже. Строгая ступень подбора пустела, и список уходил в
+    карточку кеглем 8 pt.
+    """
+    from deckwright.layout.matcher import _step_below
+    from deckwright.layout.strategy import role_typical
+
+    cfg = load_config(CONFIG)
+    for name, spec in specs:
+        ladder = ladder_for_role(spec, SlotRole.BODY)
+        typical = role_typical(spec, SlotRole.BODY)
+        if not ladder or not typical:
+            continue
+        threshold = _step_below(ladder, typical)
+        assert threshold <= typical, name
+        for variant in VARIANTS:
+            strategy = Strategy.from_config(cfg.variant(variant))
+            assert strategy.start_size(ladder, typical) >= threshold, (name, variant)
+
+
+def test_list_gets_a_place_per_item_when_the_template_has_one(specs, live_plan):
+    """Список садится туда, где каждый пункт получает своё место.
+
+    Если в шаблоне есть пригодная композиция, где пункты списка разложены по
+    местам кеглем не ниже порога, слайд не берёт ту, где они в одной рамке.
+    """
+    from deckwright.layout.matcher import (
+        _blocks_fit,
+        _lists_spread,
+        _title_fits,
+        _unsuitable,
+        _usable_slots,
+    )
+    from deckwright.layout.strategy import role_typical
+
+    cfg = load_config(CONFIG)
+    for name, spec in specs:
+        metrics = metrics_for_spec(spec).metrics
+        ladders = {role: ladder_for_role(spec, role) for role in SlotRole}
+        typical = {role: role_typical(spec, role) for role in SlotRole}
+        patterns = {pattern.id: pattern for pattern in spec.patterns}
+        for variant in VARIANTS:
+            strategy = Strategy.from_config(cfg.variant(variant))
+            deck, _ = build_deck_ir(spec, live_plan, cfg.variant(variant))
+            if len(deck.slides) != len(live_plan.slides):
+                continue  # деление сдвинуло номера — сверять не с чем
+            for slide, built in zip(live_plan.slides, deck.slides, strict=True):
+                chosen = patterns.get(built.pattern_id)
+                if chosen is None or _lists_spread(chosen, spec, slide, strategy):
+                    continue
+                exists = any(
+                    _usable_slots(pattern, spec.slide_width_emu, spec.slide_height_emu)
+                    and pattern.id in {p.id for p in spec.content_patterns}
+                    and not _unsuitable(pattern, spec, slide, strategy)
+                    and _lists_spread(pattern, spec, slide, strategy)
+                    and _title_fits(pattern, slide, strategy, metrics, ladders[SlotRole.TITLE])
+                    and _blocks_fit(pattern, spec, slide, strategy, metrics, ladders, typical)
+                    for pattern in spec.patterns
+                )
+                assert not exists, (
+                    f"{name}/{variant}: слайд {slide.index} — список в одной рамке, "
+                    "хотя есть композиция с местом под каждый пункт"
+                )

@@ -18,6 +18,7 @@ from pathlib import Path
 
 from lxml import etree
 from pptx import Presentation
+from pptx.enum.shapes import MSO_SHAPE_TYPE
 from pptx.presentation import Presentation as PresentationObject
 
 from deckwright.parse import tokens as tokens_mod
@@ -388,6 +389,10 @@ def _parse(path: Path, font_dir: Path | None) -> TemplateSpec:
 
     # ── Паттерны со слайдов-примеров ─────────────────────────────────────────
     by_layout_id = {layout.id: layout for layout in layouts}
+    layout_use: dict[int, int] = {}
+    for slide in prs.slides:
+        key = id(slide.slide_layout._element)
+        layout_use[key] = layout_use.get(key, 0) + 1
     patterns = []
     backdrops: dict[int, Color | None] = {}
     for index, slide in enumerate(prs.slides, start=1):
@@ -428,6 +433,8 @@ def _parse(path: Path, font_dir: Path | None) -> TemplateSpec:
                         for slot in pattern.slots
                     ],
                     "figure_pictures": _figure_pictures(tree),
+                    "baked_items": bool(pattern.repeaters)
+                    and _layout_draws_items(slide.slide_layout, layout_use, slide_w, slide_h),
                     "repeaters": [
                         repeater.model_copy(
                             update={
@@ -524,6 +531,22 @@ def _parse(path: Path, font_dir: Path | None) -> TemplateSpec:
         recurring=recurring,
         warnings=warnings,
     )
+
+
+def _layout_draws_items(layout, layout_use: dict[int, int], slide_w: int, slide_h: int) -> bool:
+    """Нарисованы ли элементы композиции в картинке её layout'а.
+
+    Layout, свой у одного слайда, с картинкой крупнее половины слайда: так
+    на `vk_tech` сделана сетка 2×2 — карточки и номера «01–04» в фоне.
+    """
+    if layout_use.get(id(layout._element), 0) > 1:
+        return False
+    for shape in layout.shapes:
+        if shape.is_placeholder or shape.shape_type != MSO_SHAPE_TYPE.PICTURE:
+            continue
+        if (shape.width or 0) * (shape.height or 0) >= 0.5 * slide_w * slide_h:
+            return True
+    return False
 
 
 def _figure_pictures(tree) -> list[Box]:

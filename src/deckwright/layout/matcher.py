@@ -198,6 +198,46 @@ def _seats_all(
     return True
 
 
+def _seatings(
+    pattern: Pattern, spec: TemplateSpec, plan_slide: SlidePlan, strategy: Strategy
+) -> list[tuple[object, list]]:
+    """Раскладка блоков слайда по местам композиции — та же, что при сборке.
+
+    Блок без места получает пустой список мест.
+    """
+    free = _fill_share(
+        pattern, _usable_slots(pattern, spec.slide_width_emu, spec.slide_height_emu), strategy
+    )
+    title = _title_slot(pattern)
+    taken = [title.box] if title is not None else []
+    result = []
+    for block in plan_slide.blocks:
+        if not _block_lines(block):
+            continue
+        seats = _seat(pattern, block, strategy.role_for(block), free, taken) or []
+        result.append((block, seats))
+        taken.extend(slot.box for slot, _ in seats)
+    return result
+
+
+def _lists_spread(
+    pattern: Pattern, spec: TemplateSpec, plan_slide: SlidePlan, strategy: Strategy
+) -> bool:
+    """Каждый пункт каждого списка получает своё место.
+
+    Список из трёх пунктов в одной рамке при пустом слайде — то, что
+    правило выбора запрещает, пока есть композиция, где пункты разложены
+    по карточкам (`vk_tech` dense 9, `vk_workspace` dense 5). Два пункта на
+    карточку — тоже не своё место: на `vk_education` четыре шага садились
+    парами в две подписи под иконками мимо сетки из четырёх карточек.
+    """
+    return all(
+        len(seats) >= len(block.items)
+        for block, seats in _seatings(pattern, spec, plan_slide, strategy)
+        if block.kind in _SPREAD_KINDS and len(block.items) > 1
+    )
+
+
 def _spare_cards(
     pattern: Pattern, spec: TemplateSpec, plan_slide: SlidePlan, strategy: Strategy
 ) -> int:
@@ -220,6 +260,101 @@ def _spare_cards(
                 spare += max(0, repeater.observed_count - len(seats))
         taken.extend(slot.box for slot, _ in seats)
     return spare
+
+
+def _unsuitable(
+    pattern: Pattern, spec: TemplateSpec, plan_slide: SlidePlan, strategy: Strategy
+) -> bool:
+    """Композиция, которую для этого слайда не берут, если есть другая.
+
+    Два случая, оба — правило выбора, а не принятое ограничение:
+
+    * элементы нарисованы в картинке layout'а (`baked_items`), и не все они
+      получат содержание: пустую нарисованную карточку не убрать — «03 04»
+      под таблицей `vk_tech`;
+    * список садится в одно место, а рядом такие же места той же роли —
+      карточки, не опознанные повтором: три пункта мелко в одной карточке
+      при пустом слайде (`vk_tech`, dense 9).
+    """
+    free = _fill_share(
+        pattern, _usable_slots(pattern, spec.slide_width_emu, spec.slide_height_emu), strategy
+    )
+    title = _title_slot(pattern)
+    taken = [title.box] if title is not None else []
+    filled: dict[str, set[str]] = {}
+    cramped = []
+    for block in plan_slide.blocks:
+        if not _block_lines(block):
+            continue
+        seats = _seat(pattern, block, strategy.role_for(block), free, taken)
+        if seats is None:
+            continue
+        for slot, _ in seats:
+            for repeater in pattern.repeaters:
+                prefix = f"{repeater.id}_"
+                if slot.id.startswith(prefix):
+                    index = slot.id[len(prefix) :].split("_", 1)[0]
+                    filled.setdefault(repeater.id, set()).add(index)
+        if block.kind in _SPREAD_KINDS and len(block.items) > 1 and len(seats) == 1:
+            cramped.append(seats[0][0])
+        if any(_on_picture(slot, pattern, len(lines)) for slot, lines in seats):
+            return True
+        taken.extend(slot.box for slot, _ in seats)
+    # Список в одном месте, а такое же место рядом осталось пустым: пункты
+    # могли получить каждый своё. Если двойники заняты другими блоками —
+    # слайд заполнен, и список в одной колонке законен.
+    empty = [s for s in free if not any(s.box == box for box in taken)]
+    if any(_twins(slot, other) for slot in cramped for other in empty):
+        return True
+    if pattern.baked_items:
+        return any(
+            len(filled.get(repeater.id, set())) < repeater.observed_count
+            for repeater in pattern.repeaters
+        )
+    return False
+
+
+def _on_picture(slot, pattern: Pattern, lines: int) -> bool:
+    """Текст на картинке длиннее, чем положил туда донор.
+
+    Подпись поверх иллюстрации занимает её верх, а ниже — сам рисунок:
+    рамка текста донора накрывает карточку целиком, но строк в ней две. Три
+    пункта в ту же рамку ложатся на шар `vk_tech` (dense 9).
+    """
+    donor_lines = len(slot.placeholder_text.splitlines()) or 1
+    return lines > donor_lines and any(
+        other.role is SlotRole.IMAGE and other.box.contains(slot.box)
+        for other in pattern.slots
+    )
+
+
+def _twins(slot, other) -> bool:
+    """Места одной роли и одного размера, в пределах четверти."""
+    return (
+        other.id != slot.id
+        and other.role is slot.role
+        and abs(other.box.w - slot.box.w) <= 0.25 * slot.box.w
+        and abs(other.box.h - slot.box.h) <= 0.25 * slot.box.h
+    )
+
+
+def _step_below(ladder: list[float], size: float) -> float:
+    """Ступень шкалы непосредственно под кеглем `size`; сам он, если ниже нет."""
+    lower = [step for step in ladder if step < size]
+    return lower[-1] if lower else size
+
+
+def _undeclared(spec: TemplateSpec, role: SlotRole, ladder: list[float]) -> float:
+    """Кегль места, для которого шаблон его не объявил: типичный для роли.
+
+    Карточки повторителя стиля не несут. Середина шкалы для них — 14 pt у
+    `vk_tech` при типичном теле 18 pt: фиттер стартовал ниже порога
+    читаемости и не мог его достичь, а подбор принимал любые карточки,
+    вплоть до 4 pt. Ниже середины шкалы старт не опускается: у ролей, которые
+    шаблон набирает мелко, крупное число показателя стало бы подписью.
+    """
+    middle = ladder[len(ladder) // 2] if ladder else 18.0
+    return max(role_typical(spec, role), middle)
 
 
 def _blocks_fit(
@@ -272,13 +407,20 @@ def _blocks_fit(
         declared = (
             slot.style.size_pt
             if slot.style is not None
-            else (ladder[len(ladder) // 2] if ladder else 18.0)
+            else _undeclared(spec, slot.role, ladder)
         )
         start = strategy.start_size(ladder, declared)
         fits = _fit_seats([(seat.box, text) for seat, text in seats], metrics, ladder, start)
         if not all(fit.fits for fit in fits):
             return False
-        if typical is not None and min(f.size_pt for f in fits) < typical.get(role, 0.0):
+        # Порог — ступень шкалы под типичным кеглем роли, одна для всех
+        # вариантов. Ровно типичный недостижим для плотного (старт на
+        # ступень ниже), со сдвигом вверх — для воздушного. Строгая ступень
+        # пустела, подбор уходил в «влезает хоть как-то», и три пункта на
+        # `vk_tech` садились в карточку кеглем 8 pt, а то и в таймлайн 4 pt.
+        if typical is not None and min(f.size_pt for f in fits) < _step_below(
+            ladder, typical.get(role, 0.0)
+        ):
             return False
         taken.extend(seat.box for seat, _ in seats)
     return True
@@ -311,7 +453,9 @@ def pick_pattern(
 
     typical = {role: role_typical(spec, role) for role in SlotRole}
 
-    def fitting(candidates: list[Pattern]) -> list[Pattern]:
+    def fitting(
+        candidates: list[Pattern], tiers: tuple = (typical, None)
+    ) -> list[Pattern]:
         """Те, куда влезают и заголовок, и содержание.
 
         Сначала — где содержание читается типичным кеглем шаблона; если таких
@@ -322,7 +466,7 @@ def pick_pattern(
             for pattern in candidates
             if _title_fits(pattern, plan_slide, strategy, metrics, title_ladder)
         ]
-        for strict in (typical, None):
+        for strict in tiers:
             found = [
                 pattern
                 for pattern in titled
@@ -331,6 +475,16 @@ def pick_pattern(
             if found:
                 return found
         return []
+
+    verdicts: dict[str, bool] = {}
+
+    def unsuitable(pattern: Pattern) -> bool:
+        if pattern.id not in verdicts:
+            verdicts[pattern.id] = _unsuitable(pattern, spec, plan_slide, strategy)
+        return verdicts[pattern.id]
+
+    def suitable(candidates: list[Pattern]) -> list[Pattern]:
+        return [pattern for pattern in candidates if not unsuitable(pattern)]
 
     def best_of(candidates: list[Pattern]) -> Pattern:
         """Порядок решений: влезает текст → ещё не было в колоде → вариант.
@@ -352,7 +506,7 @@ def pick_pattern(
             for block in plan_slide.blocks
         )
 
-        def key(pattern: Pattern) -> tuple[bool, bool, bool, int, int]:
+        def key(pattern: Pattern) -> tuple[bool, bool, bool, bool, int, int]:
             # `avoid` — композиции, которые для этого слайда уже взяли другие
             # варианты. Варианты строятся независимо, и там, где влезающих
             # композиций мало, два из них брали одну и ту же: на `vk_tech`
@@ -361,6 +515,7 @@ def pick_pattern(
             # уберёт, но не ту, что нарисована в самом layout'е, — на
             # `vk_tech` три пункта ложились в пять пронумерованных карточек.
             return (
+                unsuitable(pattern),
                 # Композиция с картинками-показателями донора (кольца «10%») —
                 # макет под данные: слайду без данных картинки уйдут, и он
                 # останется с тремя строками посреди пустоты.
@@ -385,8 +540,6 @@ def pick_pattern(
         for pattern in spec.patterns_matching(needed, preferred=preferred)
         if _usable_slots(pattern, spec.slide_width_emu, spec.slide_height_emu)
     ]
-    if matches and fitting(matches):
-        return best_of(matches)
 
     # Мягкий подбор: заголовок плюс сколько-нибудь мест. Здесь порядок решает
     # не класс, а **сколько блоков паттерн реально усадит**. Иначе выбирается
@@ -402,6 +555,28 @@ def pick_pattern(
     # Строгой сигнатуры нет или текст в неё не влезает. Композиция с
     # текстовыми рамками другой роли, куда он влезает, лучше: подмена роли
     # («абзац» вместо «списка») видна только в коде, переполнение — глазами.
+    #
+    # Сначала — только пригодные композиции (`_unsuitable`): строгая сигнатура,
+    # потом мягкая. Непригодная берётся, лишь когда пригодной нет нигде.
+    # И типичный кегль — в обоих пулах раньше минимального: строгая
+    # сигнатура, где список влезает только кеглем 8 pt, хуже мягкой, где он
+    # читается. Внутри ступени сначала композиции, где список разложен по
+    # местам, — пункт на место.
+    for tier in (typical, None):
+        for spread in (True, False):
+            for pool in (matches, relaxed):
+                roomy = fitting(
+                    [
+                        pattern
+                        for pattern in suitable(pool)
+                        if not spread or _lists_spread(pattern, spec, plan_slide, strategy)
+                    ],
+                    (tier,),
+                )
+                if roomy:
+                    return best_of(roomy)
+    if matches and fitting(matches):
+        return best_of(matches)
     roomy = fitting(relaxed)
     if roomy:
         return best_of(roomy)
@@ -1504,7 +1679,7 @@ def build_slide_ir(
         declared = (
             slot.style.size_pt
             if slot is not None and slot.style is not None
-            else (block_ladder[len(block_ladder) // 2] if block_ladder else 18.0)
+            else _undeclared(spec, slot.role if slot is not None else role, block_ladder)
         )
         start = strategy.start_size(block_ladder, declared)
         element_id = f"s{plan_slide.index}_b{position}"
