@@ -14,6 +14,7 @@ from __future__ import annotations
 from pptx.chart.data import CategoryChartData
 from pptx.dml.color import RGBColor
 from pptx.enum.chart import XL_CHART_TYPE, XL_LABEL_POSITION, XL_LEGEND_POSITION
+from pptx.oxml.ns import qn
 from pptx.util import Emu, Pt
 
 from deckwright.schemas import Box, ChartContent, ChartKind, ChartSeries, Color
@@ -144,6 +145,10 @@ def _emphasize(chart, content: ChartContent) -> None:
         if content.label_style is not None:
             labels.font.size = Pt(content.label_style.size_pt)
             labels.font.bold = True
+        # Подпись значения — в одну строку: «42 мин», а не «42 / мин».
+        body = labels._element.find(".//" + qn("a:bodyPr"))
+        if body is not None:
+            body.set("wrap", "none")
         value_axis = chart.value_axis
         value_axis.visible = False
         value_axis.has_major_gridlines = False

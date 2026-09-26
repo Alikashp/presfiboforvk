@@ -18,8 +18,10 @@
 
 from __future__ import annotations
 
+import colorsys
+
 from deckwright.layout.fitter import FitResult, fit_paragraphs, fit_size, split_blocks
-from deckwright.layout.strategy import Strategy, ladder_for_role, role_typical
+from deckwright.layout.strategy import Strategy, ladder_for_role, role_typical, scale_ladder
 from deckwright.layout.text_metrics import FontMetrics, metrics_for_spec
 from deckwright.schemas import (
     BlockKind,
@@ -861,6 +863,13 @@ def _data_element(
                 update={"size_pt": max(CHART_MIN_PT, min(style.size_pt, body))}
             )
             single = len(series) == 1
+            unit = series_unit(block.series_ids, pack)
+            # Подпись значения — в одну строку над столбиком: кегль по ширине
+            # столбика в пределах шкалы, а не влезло — без единицы.
+            size, unit = _value_label(
+                box, categories, series[0].values, unit, label.size_pt, spec
+            )
+            label = label.model_copy(update={"size_pt": size})
             return Element(
                 id=element_id,
                 kind=ElementKind.CHART,
@@ -872,7 +881,7 @@ def _data_element(
                     categories=categories,
                     series=series,
                     has_legend=len(series) > 1,
-                    unit=series_unit(block.series_ids, pack),
+                    unit=unit,
                     label_style=label,
                     highlight=_key_points(series[0].values, plan_slide, pack) if single else [],
                     muted_color=_muted(series[0].color, background, is_dark) if single else None,
@@ -886,10 +895,13 @@ def _data_element(
         brand = _brand_colors(spec, background, is_dark)
         table = _table_content(block, pack, cell)
         if table is not None:
+            # Кегль — наибольший из шкалы, при котором таблица помещается в
+            # отданное ей место: не мелкий текст в четверти слайда.
+            size = _table_size(table, box, spec, body)
+            cell = cell.model_copy(update={"size_pt": size})
+            table = table.model_copy(update={"cell_style": cell})
             fill = brand[0]
-            header = cell.model_copy(
-                update={"color": readable_text_color_on(fill), "bold": True}
-            )
+            header = cell.model_copy(update={"color": _header_text(fill), "bold": True})
             values = [_number(row[-1]) for row in table.rows]
             keys = (
                 _key_points(values, plan_slide, pack)
@@ -915,6 +927,50 @@ def _data_element(
     return None
 
 
+# До скольких текстовых кеглей таблица может вырасти, если место есть, и до
+# какой высоты строки в кеглях — растянуть строки по месту.
+TABLE_MAX_SCALE = 2.0
+TABLE_ROW_MAX = 2.6
+
+
+def _table_size(table: TableContent, box: Box, spec: TemplateSpec, body: float) -> float:
+    """Наибольший кегль шкалы, при котором таблица помещается в рамку.
+
+    По высоте — строки по кеглю; по ширине — самая длинная ячейка колонки.
+    Выше двух текстовых кеглей не растёт: таблица — не заголовок.
+    """
+    rows = len(table.rows) + 1
+    columns = max(1, len(table.header))
+    longest = max(
+        (len(cell) for row in [table.header, *table.rows] for cell in row), default=1
+    )
+    ceiling = max(CHART_MIN_PT, body * TABLE_MAX_SCALE)
+    steps = sorted(
+        {step for step in scale_ladder(spec) if CHART_MIN_PT <= step <= ceiling}
+        | {CHART_MIN_PT},
+        reverse=True,
+    )
+    for step in steps:
+        height = rows * step * TABLE_ROW_HEIGHT * EMU_PER_POINT
+        width = columns * (longest * CHAR_WIDTH + 2) * step * EMU_PER_POINT
+        if height <= box.h * 0.9 and width <= box.w:
+            return step
+    return steps[-1]
+
+
+def _header_text(fill: Color) -> Color:
+    """Текст шапки на заливке бренда.
+
+    Шапка набрана крупно и полужирно — для неё порог 3:1. На насыщенной
+    заливке бренда шаблоны пишут белым (синие карточки всех трёх шаблонов
+    VK), и белый берётся, если читается; иначе — самый контрастный.
+    """
+    white = Color(rgb="FFFFFF")
+    if _saturation(fill) >= 0.5 and white.contrast_ratio(fill) >= GRAPHIC_CONTRAST:
+        return white
+    return readable_text_color_on(fill)
+
+
 def _table_box(table: TableContent, style: TextStyle, slot: Box, roomy: Box) -> Box:
     """Рамка, в которую таблица действительно помещается.
 
@@ -931,14 +987,86 @@ def _table_box(table: TableContent, style: TextStyle, slot: Box, roomy: Box) -> 
     needed_h = round(rows * style.size_pt * TABLE_ROW_HEIGHT * EMU_PER_POINT)
     needed_w = round(len(table.header) * style.size_pt * TABLE_MIN_CHARS * EMU_PER_POINT)
     if slot.h >= needed_h and slot.w >= needed_w:
-        return slot
+        # Высота — по строкам, а не во всю отданную рамку: растянутые на
+        # полслайда строки с одной цифрой читаются как пустая сетка. Место
+        # есть — строки просторнее, но не больше чем в 2.6 кегля.
+        roomy_h = round(rows * style.size_pt * TABLE_ROW_MAX * EMU_PER_POINT)
+        return slot.model_copy(update={"h": min(slot.h, max(needed_h, roomy_h))})
     return Box(
         x=roomy.x,
         y=roomy.y,
         w=max(roomy.w, needed_w) if roomy.w >= needed_w else roomy.w,
-        h=min(roomy.h, max(needed_h, roomy.h)) if needed_h <= roomy.h else roomy.h,
+        h=min(roomy.h, needed_h),
     )
 
+
+# Отступ данных от заголовка — доля высоты слайда.
+DATA_GAP_SHARE = 30
+
+# Высота строки заголовка в кеглях — та же, которой мерит фиттер.
+TITLE_LINE = 1.2
+
+
+# Доля ширины категории, которую занимает столбик, и средняя ширина знака
+# в кеглях: оценка для подписи над столбиком, не точный замер.
+BAR_SHARE = 0.55
+CHAR_WIDTH = 0.6
+
+
+def _value_label(
+    box: Box, categories: list[str], values: list[float], unit: str, size: float,
+    spec: TemplateSpec,
+) -> tuple[float, str]:
+    """Кегль и единица подписи значения, при которых она не переносится.
+
+    «42 мин» над узким столбиком переносилась в «42 / мин». Кегль опускается
+    по шкале шаблона до предела подписи; не хватило — подпись без единицы.
+    """
+    bar = box.w * 0.9 / max(1, len(categories)) * BAR_SHARE / EMU_PER_POINT
+    longest = max((len(f"{value:g}") for value in values), default=1)
+    ladder = sorted(
+        {step for step in scale_ladder(spec) if CHART_MIN_PT <= step <= size} | {size},
+        reverse=True,
+    )
+    for label_unit in ((unit, "") if unit else ("",)):
+        chars = longest + (len(label_unit) + 1 if label_unit else 0)
+        for step in ladder:
+            if chars * step * CHAR_WIDTH <= bar:
+                return step, label_unit
+    return ladder[-1], ""
+
+
+def _free_region(
+    slot: Box, area: Box, top: int, others: list[Box], spec: TemplateSpec
+) -> Box:
+    """Наибольшая свободная область вокруг места под данные.
+
+    Область содержания ниже заголовка, от которой отрезано то, что занимают
+    соседние блоки: слева от места — по их правый край, справа — по левый,
+    сверху — по низ. Не вышло места больше исходного — остаётся исходное.
+    """
+    gap = spec.slide_height_emu // DATA_GAP_SHARE
+    left, right = area.x, area.right
+    upper, lower = max(area.y, top), area.bottom
+    for other in others:
+        if other.right <= slot.x:
+            left = max(left, other.right + gap)
+        elif other.x >= slot.right:
+            right = min(right, other.x - gap)
+        elif other.bottom <= slot.y:
+            upper = max(upper, other.bottom + gap)
+        elif other.y >= slot.bottom:
+            lower = min(lower, other.y - gap)
+    region = Box(x=left, y=upper, w=max(1, right - left), h=max(1, lower - upper))
+    if region.area <= slot.area or not _roomy_for_data(region, spec):
+        clipped_top = max(slot.y, top)
+        return slot.model_copy(update={"y": clipped_top, "h": max(1, slot.bottom - clipped_top)})
+    return region
+
+
+# Насыщенность второстепенных точек: цвет бренда угадывается, но не спорит
+# с главными.
+MUTED_SATURATION = 0.18
 
 # Мельче этого подписи графика не читаются с проектора.
 CHART_MIN_PT = 10.0
@@ -975,22 +1103,46 @@ def _saturation(color: Color) -> float:
 
 
 def _muted(color: Color, background: Color | None, is_dark: bool) -> Color:
-    """Тот же цвет, наполовину растворённый в фоне: второстепенные точки."""
+    """Второстепенные точки: тот же цвет без насыщенности, видимый на фоне.
+
+    Не растворение в фоне: на тёмном фоне оно темнит, и «21 мин»
+    тёмно-синим на чёрном `vk_workspace` почти пропадала. Цвет теряет
+    насыщенность и сдвигается по светлоте от фона, пока не наберёт 3:1 —
+    как любая графика.
+    """
     base = background or (Color(rgb="000000") if is_dark else Color(rgb="FFFFFF"))
-    channels = []
-    for i in (0, 2, 4):
-        top, bottom = int(color.rgb[i : i + 2], 16), int(base.rgb[i : i + 2], 16)
-        channels.append(f"{round(0.35 * top + 0.65 * bottom):02X}")
-    return Color(rgb="".join(channels))
+    red, green, blue = (int(color.rgb[i : i + 2], 16) / 255 for i in (0, 2, 4))
+    hue, light, _ = colorsys.rgb_to_hls(red, green, blue)
+
+    def at(lightness: float) -> Color:
+        channels = colorsys.hls_to_rgb(hue, min(1.0, max(0.0, lightness)), MUTED_SATURATION)
+        return Color(rgb="".join(f"{round(c * 255):02X}" for c in channels))
+
+    steps = [light + step * 0.02 for step in range(0, 50)]
+    if base.luminance < 0.5:
+        # Тёмный фон: светлеть, пока не станет видно.
+        return next(
+            (c for c in map(at, steps) if c.contrast_ratio(base) >= GRAPHIC_CONTRAST),
+            at(steps[-1]),
+        )
+    # Светлый фон: светлеть, пока держится 3:1, — второстепенное отступает,
+    # но не пропадает.
+    chosen = at(light)
+    for candidate in map(at, steps):
+        if candidate.contrast_ratio(base) < GRAPHIC_CONTRAST + 0.1:
+            break
+        chosen = candidate
+    return chosen
 
 
 def _key_points(values: list[float], plan_slide: SlidePlan | None, pack) -> list[int]:
     """Точки ряда, которые несут вывод слайда.
 
-    Это точки, чьё значение слайд объявил в своих числах (`figures`) ссылкой
-    на факт пакета: «от 42 до 9 минут» — это две точки, 42 и 9. Разбирать
-    текст заголовка не нужно — числа слайда уже структурированы. Не объявил
-    ничего — главная последняя точка: итог, к которому пришёл ряд.
+    Концы ряда — «было» и «стало» — выделены всегда: один и тот же вывод
+    («от 42 до 9») должен выглядеть одинаково в любой колоде, а объявленные
+    числа слайда у разных планов разные. К ним добавляются точки, чьё
+    значение слайд объявил в своих числах (`figures`) ссылкой на факт пакета.
+    Текст заголовка не разбирается — числа слайда уже структурированы.
     """
     facts = {fact.id: fact.value for fact in getattr(pack, "facts", []) if fact.value is not None}
     declared = {
@@ -999,8 +1151,8 @@ def _key_points(values: list[float], plan_slide: SlidePlan | None, pack) -> list
         for fact_id in figure.fact_ids
         if fact_id in facts
     }
-    chosen = [index for index, value in enumerate(values) if value in declared]
-    return chosen or [len(values) - 1]
+    ends = {0, len(values) - 1} if len(values) > 1 else {0}
+    return sorted(ends | {index for index, value in enumerate(values) if value in declared})
 
 
 def _within_margins(box: Box, area: Box) -> Box | None:
@@ -1258,6 +1410,11 @@ def build_slide_ir(
             )
     else:
         title_size = title_start
+    # Низ заголовка — по его строкам, а не по рамке: переполненный заголовок
+    # выходит из рамки вниз, и график под ним касался подписи «42 мин».
+    title_bottom = title_box.y + max(
+        title_box.h, round(title_used * title_size * TITLE_LINE * EMU_PER_POINT)
+    )
 
     elements.append(
         Element(
@@ -1364,7 +1521,19 @@ def build_slide_ir(
             _fit_seats(placed, metrics, block_ladder, start) if metrics is not None else []
         )
         color = colors[0]
+        others = [taken_box for taken_box in taken if taken_box is not title_box]
         taken.extend(seat_box for seat_box, _ in placed)
+
+        # График и таблица занимают освободившееся место: место донора под
+        # них часто — карточка в углу, а картинки рядом уходят в рендере. Растут
+        # в свободную область ниже заголовка, в полях шаблона, не заходя на
+        # соседние блоки. Последний блок — чтобы не занять место следующих.
+        if role in _DATA_ROLES and slot is not None:
+            top = title_bottom + spec.slide_height_emu // DATA_GAP_SHARE
+            if position == len(plan_slide.blocks) - 1:
+                box = _free_region(box, _content_area(spec, container), top, others, spec)
+            elif box.y < top:
+                box = box.model_copy(update={"y": top, "h": max(1, box.bottom - top)})
 
         # Числовой ряд и таблица становятся нативными объектами, а не
         # пересказом строками: ТЗ засчитывает только `c:chart` и `a:tbl`, и

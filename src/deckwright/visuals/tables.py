@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 from pptx.dml.color import RGBColor
+from pptx.enum.text import MSO_ANCHOR
 from pptx.util import Emu, Pt
 
 from deckwright.schemas import Box, Color, TableContent, TextStyle
@@ -30,6 +31,13 @@ def add_table(
     )
     table = frame.table
     _use_template_styling(table)
+    # Высота строки — по кеглю, а не доля растянутой рамки; текст — по
+    # центру ячейки по вертикали.
+    row_height = Emu(round(box.h / rows))
+    for row in table.rows:
+        row.height = row_height
+        for cell in row.cells:
+            cell.vertical_anchor = MSO_ANCHOR.MIDDLE
 
     accent = content.header_fill or accent
     for index, title in enumerate(content.header):
