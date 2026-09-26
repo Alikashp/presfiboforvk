@@ -643,3 +643,54 @@ def test_title_and_closing_use_the_templates_own_slides(specs, plan):
         if plan.slides[-1].intent is SlideIntent.CLOSING:
             wanted = spec.closing_pattern_id or spec.cover_pattern_id
             assert deck.slides[-1].pattern_id == wanted, name
+
+
+def test_secondary_bars_stay_visible_on_dark_and_light():
+    """Приглушённый столбик — 3:1 к фону: на чёрном светлее, на белом бледнее."""
+    from deckwright.layout.matcher import GRAPHIC_CONTRAST, _muted
+
+    accent = Color(rgb="0077FF")
+    for background in ("000000", "FFFFFF", "F2F0E8"):
+        base = Color(rgb=background)
+        muted = _muted(accent, base, base.luminance < 0.5)
+        assert muted.contrast_ratio(base) >= GRAPHIC_CONTRAST, background
+        assert muted.rgb != accent.rgb
+    on_black = _muted(accent, Color(rgb="000000"), True)
+    assert on_black.luminance > Color(rgb="000000").luminance + 0.1
+
+
+def test_same_conclusion_is_highlighted_the_same_way():
+    """«От 42 до 9» — оба конца, что бы ни объявил план."""
+    from deckwright.layout.matcher import _key_points
+
+    assert _key_points([42.0, 21.0, 9.0], None, None) == [0, 2]
+
+
+def test_data_takes_the_freed_space_but_not_the_neighbours():
+    """График растёт в свободную область ниже заголовка, не на соседний блок."""
+    from deckwright.layout.matcher import _free_region
+
+    inch = 914400
+
+    class Spec:
+        slide_width_emu = 10 * inch
+        slide_height_emu = int(5.625 * inch)
+
+    area = Box(x=inch // 2, y=inch, w=9 * inch, h=4 * inch)
+    slot = Box(x=6 * inch, y=3 * inch, w=2 * inch, h=inch)
+    grown = _free_region(slot, area, int(1.2 * inch), [], Spec)
+    assert grown.area > 4 * slot.area and grown.y >= int(1.2 * inch)
+    neighbour = Box(x=inch // 2, y=2 * inch, w=3 * inch, h=2 * inch)
+    beside = _free_region(slot, area, int(1.2 * inch), [neighbour], Spec)
+    assert beside.x >= neighbour.right
+
+
+def test_value_label_drops_the_unit_rather_than_wrapping(specs):
+    """Над узким столбиком «42 мин» не помещается — остаётся «42»."""
+    from deckwright.layout.matcher import _value_label
+
+    inch = 914400
+    for _, spec in specs[:1]:
+        narrow = Box(x=0, y=0, w=int(1.2 * inch), h=2 * inch)
+        size, unit = _value_label(narrow, ["a", "b", "c", "d", "e"], [42.0] * 5, "мин", 14.0, spec)
+        assert unit == "" and size >= 10.0
