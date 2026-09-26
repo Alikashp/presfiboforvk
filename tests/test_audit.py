@@ -888,3 +888,59 @@ def test_large_text_needs_three_to_one_and_the_templates_own_pair_is_accepted(cl
     # Крупный текст: 3:1 по WCAG, находки нет.
     _restyle(element, color=Color(rgb="FFFFFF"), size_pt=24.0)
     assert found(Writes(False)) == []
+
+
+def test_text_over_the_templates_line_is_caught():
+    """Графика донора в IR не попадает — проверка берёт её из разбора шаблона.
+
+    Линия под цифрой `vk_tech` оставалась под нашим текстом, и
+    `layout.overlap`, сравнивающий только наши элементы, молчал. Полоса
+    текста — по строкам, кеглю и привязке: рамка, прижатая к низу, пуста
+    сверху, и линия там — не наложение.
+    """
+    from deckwright.audit.deterministic import geometry
+    from deckwright.schemas import (
+        Color,
+        Element,
+        ElementKind,
+        Paragraph,
+        Pattern,
+        PatternClass,
+        Provenance,
+        SlideIR,
+        Slot,
+        SlotRole,
+        SourceKind,
+        TemplateSpec,
+        TextContent,
+        TextStyle,
+        VAlign,
+    )
+
+    inch = 914400
+    here = Provenance(kind=SourceKind.SLIDE, ref="test")
+    frame = Box(x=inch, y=inch, w=4 * inch, h=2 * inch)
+
+    def slide(valign: VAlign) -> SlideIR:
+        style = TextStyle(font_family="Arial", size_pt=20, color=Color(rgb="000000"),
+                          valign=valign)
+        text = TextContent(paragraphs=[Paragraph(text="42 минуты", style=style)], used_lines=1)
+        element = Element(id="e", kind=ElementKind.TEXT, role=SlotRole.BODY, box=frame,
+                          provenance=here, text=text)
+        return SlideIR(index=2, pattern_id="p", elements=[element])
+
+    def spec(line: Box) -> TemplateSpec:
+        slot = Slot(id="s", role=SlotRole.BODY, box=frame, provenance=here)
+        pattern = Pattern(id="p", pattern_class=PatternClass.KPI_ROW, donor_slide_index=1,
+                          slots=[slot], content_area=frame, decor=[line], provenance=here)
+        return TemplateSpec(template_sha256="0" * 64, source_name="t", slide_width_emu=10 * inch,
+                            slide_height_emu=6 * inch, patterns=[pattern])
+
+    top_line = Box(x=inch, y=int(1.2 * inch), w=3 * inch, h=9144)
+    found = geometry.text_over_decor(slide(VAlign.TOP), spec(top_line))
+    assert [issue.check_id for issue in found] == ["layout.text_over_decor"]
+    # Текст прижат к низу рамки: линия вверху пустой части — не наложение.
+    assert geometry.text_over_decor(slide(VAlign.BOTTOM), spec(top_line)) == []
+    # Линия ниже рамки — тоже.
+    below = top_line.model_copy(update={"y": frame.bottom + inch // 10})
+    assert geometry.text_over_decor(slide(VAlign.TOP), spec(below)) == []

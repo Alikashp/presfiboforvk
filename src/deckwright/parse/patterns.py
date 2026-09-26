@@ -32,6 +32,7 @@ from lxml import etree
 
 from deckwright.parse.geometry import iter_shapes
 from deckwright.schemas import (
+    Align,
     Box,
     Color,
     Pattern,
@@ -42,6 +43,7 @@ from deckwright.schemas import (
     SlotRole,
     SourceKind,
     TextStyle,
+    VAlign,
 )
 
 A_NS = "http://schemas.openxmlformats.org/drawingml/2006/main"
@@ -101,6 +103,42 @@ def _color_of(element: etree._Element) -> Color | None:
     """Цвет, которым донор пишет текст этой фигуры; None — не объявлен."""
     resolve = _COLOR_OF.get()
     return resolve(element) if resolve is not None else None
+
+
+_ALGN = {"l": Align.LEFT, "ctr": Align.CENTER, "r": Align.RIGHT, "just": Align.JUSTIFY,
+         "dist": Align.JUSTIFY}
+
+
+def text_align(element: etree._Element) -> Align | None:
+    """Выравнивание, которым донор пишет текст фигуры; None — не объявлено.
+
+    Выравнивание большинства абзацев с текстом; абзац без своего `algn`
+    берёт его из списка стилей фигуры (`lstStyle`). Не объявлено нигде —
+    наследуется, и решает звено выше: плейсхолдер макета, мастер.
+    """
+    shared_node = element.find(f".//{{{A_NS}}}lstStyle/{{{A_NS}}}lvl1pPr")
+    shared = _ALGN.get(shared_node.get("algn", "")) if shared_node is not None else None
+    counts: dict[Align, int] = {}
+    for paragraph in element.iter(f"{{{A_NS}}}p"):
+        text = "".join(node.text or "" for node in paragraph.iter(f"{{{A_NS}}}t")).strip()
+        if not text:
+            continue
+        props = paragraph.find(f"{{{A_NS}}}pPr")
+        align = (_ALGN.get(props.get("algn", "")) if props is not None else None) or shared
+        if align is not None:
+            counts[align] = counts.get(align, 0) + len(text)
+    if counts:
+        return max(counts, key=counts.get)
+    return shared
+
+
+_ANCHOR = {"t": VAlign.TOP, "ctr": VAlign.MIDDLE, "b": VAlign.BOTTOM}
+
+
+def text_valign(element: etree._Element) -> VAlign | None:
+    """Привязка текста фигуры по вертикали; None — не объявлена."""
+    body = element.find(f".//{{{A_NS}}}bodyPr")
+    return _ANCHOR.get(body.get("anchor", "")) if body is not None else None
 
 
 def _text_of(element: etree._Element) -> str:
@@ -482,6 +520,8 @@ def _slots_on(texts: list[_Shape], slide_h: int, slide_w: int, prefix: str) -> l
                 box=shape.box,
                 placeholder_text=shape.text[:80],
                 text_color=_color_of(shape.element),
+                text_align=text_align(shape.element),
+                text_valign=text_valign(shape.element),
                 provenance=Provenance(kind=SourceKind.SLIDE, ref="элемент повторителя"),
             )
         )
@@ -624,6 +664,8 @@ def _slots_of(
                 box=shape.box,
                 placeholder_text=shape.text[:80],
                 text_color=_color_of(shape.element),
+                text_align=text_align(shape.element),
+                text_valign=text_valign(shape.element),
                 provenance=Provenance(kind=SourceKind.SLIDE, ref="элемент повторителя"),
             )
         )
@@ -748,6 +790,13 @@ def _mine_slide(
         )
         if color is not None:
             style = style.model_copy(update={"color": color})
+        align = text_align(shape.element) or (
+            inherited.style.align
+            if inherited is not None and inherited.style is not None
+            else None
+        )
+        if align is not None:
+            style = style.model_copy(update={"align": align})
         slots.append(
             Slot(
                 id=f"s{slide_index}_{position}",
@@ -755,6 +804,13 @@ def _mine_slide(
                 box=shape.box,
                 style=style,
                 placeholder_text=shape.text[:80],
+                text_align=align,
+                text_valign=text_valign(shape.element)
+                or (
+                    inherited.style.valign
+                    if inherited is not None and inherited.style is not None
+                    else None
+                ),
                 provenance=Provenance(kind=SourceKind.SLIDE, ref=f"slide{slide_index}"),
             )
         )

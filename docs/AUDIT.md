@@ -40,6 +40,7 @@
 |---|---|---|---|
 | `layout.out_of_bounds` | error | элемент выходит за границы слайда | `automatic` |
 | `layout.overlap` | error | два текстовых элемента накладываются больше чем на 15 % меньшего | `none` |
+| `layout.text_over_decor` | error | текст ложится на графику шаблона — линию (тоньше 0.1″) или значок (до 0.6″) из разбора донора (`Pattern.decor`); полоса текста — строки × кегль с учётом привязки рамки по вертикали | `none` |
 | `layout.text_overflow` | warning | текст не влез в рамку даже на минимальной ступени шкалы | `assisted` |
 | `layout.text_without_place` | warning | у обложки или финала шаблона нет места под этот текст: он не вёрстан | `assisted` |
 | `layout.margin_violation` | warning | элемент заходит в поля шаблона | `automatic` |

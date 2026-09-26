@@ -24,6 +24,7 @@ from deckwright.layout.fitter import FitResult, fit_paragraphs, fit_size, split_
 from deckwright.layout.strategy import Strategy, ladder_for_role, role_typical, scale_ladder
 from deckwright.layout.text_metrics import FontMetrics, metrics_for_spec
 from deckwright.schemas import (
+    Align,
     BlockKind,
     Box,
     ChartContent,
@@ -51,6 +52,7 @@ from deckwright.schemas import (
     TemplateSpec,
     TextContent,
     TextStyle,
+    VAlign,
     readable_text_color,
     required_contrast,
 )
@@ -220,6 +222,35 @@ def _seatings(
         result.append((block, seats))
         taken.extend(slot.box for slot, _ in seats)
     return result
+
+
+def _figure_unsplit(
+    pattern: Pattern, spec: TemplateSpec, plan_slide: SlidePlan, strategy: Strategy
+) -> bool:
+    """Показатель с подписью не получает здесь своего крупного числа.
+
+    Не делится на число и подпись — или делится, но число садится в
+    картинку-показатель донора (кольцо «10%» `vk_education`): кольцо с его
+    долей тогда остаётся и изображает данные, которых у нас нет.
+    """
+    for block, seats in _seatings(pattern, spec, plan_slide, strategy):
+        if block.kind is not BlockKind.KPI or not block.heading or not block.items:
+            continue
+        if len(seats) < 2 or seats[0][0].role is not SlotRole.KPI_VALUE:
+            return True
+        if any(
+            _share(slot.box, figure) >= 0.5
+            for slot, _ in seats
+            for figure in pattern.figure_pictures
+        ):
+            return True
+    return False
+
+
+def _share(inner: Box, outer: Box) -> float:
+    """Какая доля рамки лежит внутри другой."""
+    hit = inner.intersection(outer)
+    return hit.area / inner.area if hit is not None and inner.area else 0.0
 
 
 def _lists_spread(
@@ -515,7 +546,7 @@ def pick_pattern(
             for block in plan_slide.blocks
         )
 
-        def key(pattern: Pattern) -> tuple[bool, bool, bool, bool, int, bool, int]:
+        def key(pattern: Pattern) -> tuple[bool, bool, bool, bool, bool, int, bool, int]:
             # `avoid` — композиции, которые для этого слайда уже взяли другие
             # варианты. Варианты строятся независимо, и там, где влезающих
             # композиций мало, два из них брали одну и ту же: на `vk_tech`
@@ -529,6 +560,10 @@ def pick_pattern(
                 # макет под данные: слайду без данных картинки уйдут, и он
                 # останется с тремя строками посреди пустоты.
                 bool(pattern.figure_pictures) and not has_data,
+                # Показатель с подписью — крупным числом и подписью отдельно;
+                # это важнее разнообразия: мелкое «42 минуты» в одном абзаце
+                # с подписью — не показатель.
+                _figure_unsplit(pattern, spec, plan_slide, strategy),
                 pattern.id in avoid,
                 pattern.id in used,
                 _spare_cards(pattern, spec, plan_slide, strategy),
@@ -665,12 +700,20 @@ def _usable_slots(pattern: Pattern, slide_w: int, slide_h: int) -> list:
                     if index < len(repeater.member_backdrops)
                     else None
                 )
+                align = (
+                    repeater.member_aligns[index]
+                    if index < len(repeater.member_aligns)
+                    and repeater.member_aligns[index] is not None
+                    and slot.box.area == max(s.box.area for s in repeater.item_slots)
+                    else slot.text_align
+                )
                 expanded.append(
                     slot.model_copy(
                         update={
                             "id": f"{repeater.id}_{index}_{slot.id}",
                             "box": box,
                             "backdrop": backdrop,
+                            "text_align": align,
                         }
                     )
                 )
@@ -855,6 +898,18 @@ def _seat(
     сборке слайда: мерить одно, а собирать другое значит снова получить
     переполнение, которого подбор не предвидел.
     """
+    seats = _seat_raw(pattern, block, role, free, taken)
+    if seats is None or pattern is None or not pattern.decor:
+        return seats
+    return [
+        (slot.model_copy(update={"box": _clear_of_decor(slot.box, pattern.decor)}), lines)
+        for slot, lines in seats
+    ]
+
+
+def _seat_raw(
+    pattern: Pattern | None, block, role: SlotRole, free: list, taken: list[Box]
+) -> list[tuple[object, list[str]]] | None:
     split = _split_heading(pattern, block, free, taken)
     if split:
         return split
@@ -872,8 +927,63 @@ def _seat(
     return None
 
 
+# Доля рамки от края, в которой графика считается «сверху» или «снизу» текста.
+_DECOR_EDGE_SHARE = 0.2
+# Зазор между текстом и графикой донора: текст не касается линии. С запасом
+# на строку ниже нашей модели: LibreOffice ставит строки чуть ниже.
+_DECOR_GAP = 182_880  # 0.2″
+
+
+def _clear_of_decor(box: Box, decor: list[Box]) -> Box:
+    """Место текста без графики донора: кончается там, где она начинается.
+
+    Линия под цифрой, иконка в карточке, картинка сбоку лежат внутри рамки
+    донора, потому что его текст короче рамки и до них не доходит (или
+    отступ рамки уводит его в сторону). Наш может дойти — место обрезается
+    над графикой, если там хватает места (текст идёт сверху), иначе с той
+    стороны, где места больше: линия внизу срезает низ, значок слева в
+    невысокой карточке — левый край. Графика, накрывающая рамку
+    целиком, — подложка, её не трогаем; место, от которого осталась бы
+    полоска, — тоже.
+    """
+    left, top, right, bottom = box.x, box.y, box.right, box.bottom
+    for item in decor:
+        current = Box(x=left, y=top, w=right - left, h=bottom - top)
+        if item.intersection(current) is None or item.contains(current):
+            continue
+        options = [
+            (left, top, right, item.y - _DECOR_GAP),  # над графикой
+            (left, item.bottom + _DECOR_GAP, right, bottom),  # под ней
+            (left, top, item.x - _DECOR_GAP, bottom),  # слева
+            (item.right + _DECOR_GAP, top, right, bottom),  # справа
+        ]
+        roomy = [
+            option
+            for option in options
+            if option[2] - option[0] >= box.w * _DECOR_EDGE_SHARE
+            and option[3] - option[1] >= box.h * _DECOR_EDGE_SHARE
+        ]
+        if not roomy:
+            continue
+        # Текст идёт сверху: если над графикой места хватает, начало текста
+        # не двигается (значок в середине высокой карточки `vk_workspace`
+        # не сдвигает «4 системы» вправо). Иначе — сторона с наибольшим местом.
+        left, top, right, bottom = (
+            options[0]
+            if options[0] in roomy
+            else max(
+                roomy, key=lambda option: (option[2] - option[0]) * (option[3] - option[1])
+            )
+        )
+    return Box(x=left, y=top, w=right - left, h=bottom - top)
+
+
 # Место подписи меньше этой доли места числа — бирка, а не подпись.
-_LABEL_MIN_SHARE = 0.2
+_LABEL_MIN_SHARE = 0.15
+# Рамка числа, делимая на число и подпись: доля числа и наименьшая высота
+# (две строки подписи и строка числа не уже дюйма).
+_FIGURE_SHARE = 0.45
+_MIN_SPLIT_HEIGHT = 914_400
 # Роли, которыми пишется подпись показателя, от точной к общей.
 _LABEL_ROLES = (
     SlotRole.KPI_LABEL,
@@ -923,6 +1033,15 @@ def _split_heading(
     holdout 115 pt — и не влезает; в месте текста число пишется подписью.
     Подпись берётся из того же элемента повторителя, иначе — самое
     просторное место не дальше высоты большего из двух.
+
+    Место подписи может заходить в низ рамки числа: рамка у донора выше
+    самой цифры («Описание показателя» под «91%» на `vk_tech`). Тогда рамка
+    числа кончается там, где начинается подпись; раньше такое место
+    отбрасывалось, и число с подписью писались вместе мелко.
+
+    Места под подпись нет вовсе — рамка числа делится: сверху число, снизу
+    подпись своим кеглем. Рамка числа сначала обрезается по графике донора
+    (линия под цифрой).
     """
     if block.kind is not BlockKind.KPI or not block.heading or not block.items:
         return None
@@ -936,30 +1055,64 @@ def _split_heading(
     # Самое крупное место числа: у ряда показателей донора бывают и
     # микроподписи с ролью числа (0.18″ на `vk_tech`).
     value = max(values, key=lambda slot: slot.box.area)
+    decor = pattern.decor if pattern is not None else []
+    value_box = _clear_of_decor(value.box, decor)
     member = _member_prefix(pattern, value.id)
+
+    def below(slot) -> bool:
+        return slot.box.y >= value_box.y + value_box.h // 2
+
     labels = [
         slot
         for slot in free
         if slot is not value
         and slot.role in _LABEL_ROLES
         and clear(slot)
-        and not _overlaps(slot.box, value.box)
-        and _gap(slot.box, value.box) <= max(slot.box.h, value.box.h)
+        and (not _overlaps(slot.box, value_box) or below(slot))
+        and _gap(slot.box, value_box) <= max(slot.box.h, value_box.h)
     ]
     if member is not None:
         labels = [slot for slot in labels if slot.id.startswith(member)] or labels
-    if not labels:
-        return None
     # Самое просторное из соседних: описание показателя, а не бирка
     # «Заголовок» 0.8×0.2″ рядом с числом.
-    label = max(labels, key=lambda slot: (slot.box.area, -_gap(slot.box, value.box)))
-    # Рядом только бирка — подпись в неё не влезет; число с подписью тогда
-    # пишутся вместе в месте числа, как раньше (`vk_tech`, 91% и бирка).
-    if label.box.area < value.box.area * _LABEL_MIN_SHARE:
+    label = max(
+        labels, key=lambda slot: (slot.box.area, -_gap(slot.box, value_box)), default=None
+    )
+    if label is not None and label.box.area >= value_box.area * _LABEL_MIN_SHARE:
+        if _overlaps(label.box, value_box):
+            value_box = value_box.model_copy(update={"h": label.box.y - value_box.y})
+        free.remove(value)
+        free.remove(label)
+        return [
+            (value.model_copy(update={"box": value_box}), [block.heading]),
+            (label, list(block.items)),
+        ]
+    # Рядом только бирка или ничего: рамка числа делится по высоте.
+    if value_box.h < _MIN_SPLIT_HEIGHT:
         return None
+    top = int(value_box.h * _FIGURE_SHARE)
     free.remove(value)
-    free.remove(label)
-    return [(value, [block.heading]), (label, list(block.items))]
+    return [
+        (value.model_copy(update={"box": value_box.model_copy(update={"h": top})}),
+         [block.heading]),
+        (
+            value.model_copy(
+                update={
+                    "id": f"{value.id}_label",
+                    # Подпись — текст, и пишется кеглем основного текста, как
+                    # «Описание показателя» донора, а не бирок показателя.
+                    "role": SlotRole.BODY,
+                    "style": None,
+                    "text_color": None,
+                    "text_valign": VAlign.TOP,
+                    "box": value_box.model_copy(
+                        update={"y": value_box.y + top, "h": value_box.h - top}
+                    ),
+                }
+            ),
+            list(block.items),
+        ),
+    ]
 
 
 def _absorb(
@@ -1211,6 +1364,24 @@ def _text_color(
         (Color(rgb="FFFFFF"), Color(rgb="111111")),
         key=lambda color: color.contrast_ratio(judged),
     )
+
+
+def _align_of(slot) -> Align:
+    """Выравнивание места — то, которым пишет донор; по левому краю, если не сказано."""
+    if slot is None:
+        return Align.LEFT
+    if slot.text_align is not None:
+        return slot.text_align
+    return slot.style.align if slot.style is not None else Align.LEFT
+
+
+def _valign_of(slot) -> VAlign:
+    """Привязка места по вертикали — донора; сверху, если не сказано."""
+    if slot is None:
+        return VAlign.TOP
+    if slot.text_valign is not None:
+        return slot.text_valign
+    return slot.style.valign if slot.style is not None else VAlign.TOP
 
 
 def _content_area(spec: TemplateSpec, container) -> Box:
@@ -1811,7 +1982,9 @@ def _speaker_elements(
     color = _text_color(
         pattern, SlotRole.SPEAKER, pattern.is_dark, _under(speaker, None), spec, slot=speaker
     )
-    style = TextStyle(font_family=font_family, size_pt=size or 12.0, color=color)
+    style = TextStyle(
+        font_family=font_family, size_pt=size or 12.0, color=color, align=_align_of(speaker)
+    )
     return [
         Element(
             id=f"s{slide_index}_speaker",
@@ -1913,6 +2086,8 @@ def build_slide_ir(
                             font_family=font_family,
                             size_pt=title_size,
                             bold=True,
+                            align=_align_of(title_slot),
+                            valign=_valign_of(title_slot),
                             color=_text_color(
                                 container,
                                 SlotRole.TITLE,
@@ -2073,6 +2248,8 @@ def build_slide_ir(
                 font_family=font_family,
                 size_pt=fit.size_pt if fit is not None else starts[number],
                 color=colors[number],
+                align=_align_of(seats[number][0]),
+                valign=_valign_of(seats[number][0]),
             )
             # Число и его подпись в одном месте показателя: шаблон пишет
             # цветом показателя только число (синее «91%» `vk_tech`), подпись
