@@ -35,7 +35,7 @@ from deckwright.layout.strategy import (
 )
 from deckwright.layout.text_metrics import metrics_for_spec
 from deckwright.parse.opener import parse_template
-from deckwright.schemas import Box, Color, DeckPlan, SlotRole
+from deckwright.schemas import Box, Color, DeckPlan, SlotRole, required_contrast
 
 CONFIG = "configs/config.yaml"
 VARIANTS = ("airy", "balanced", "dense")
@@ -315,15 +315,18 @@ def test_text_is_readable_on_the_background_it_lands_on(specs, plan):
                     # цвет: на фиолетовой карточке синтетического тёмного
                     # шаблона у белого 4.35, у чёрного 4.4. Тогда требуется
                     # лучший достижимый контраст, а не невозможный.
-                    reachable = min(
-                        MIN_CONTRAST,
-                        max(
-                            Color(rgb=rgb).contrast_ratio(backdrop)
-                            for rgb in ("FFFFFF", "111111")
-                        ),
+                    best = max(
+                        Color(rgb=rgb).contrast_ratio(backdrop) for rgb in ("FFFFFF", "111111")
                     )
                     for paragraph in element.text.paragraphs:
-                        ratio = paragraph.style.color.contrast_ratio(backdrop)
+                        # Порог — по кеглю (крупному тексту WCAG хватает 3:1)
+                        # и 3:1 для пары, которой пишет сам шаблон.
+                        style = paragraph.style
+                        needed = required_contrast(style.size_pt, style.bold, MIN_CONTRAST)
+                        if spec.writes_on(style.color, backdrop):
+                            needed = min(needed, required_contrast(18.0, False, MIN_CONTRAST))
+                        reachable = min(needed, best)
+                        ratio = style.color.contrast_ratio(backdrop)
                         assert ratio >= reachable - 0.01, (
                             f"{name}/{variant}: слайд {slide.index}, {element.id} — "
                             f"контраст {ratio:.2f} при достижимом {reachable:.2f}"
@@ -868,3 +871,148 @@ def test_list_gets_a_place_per_item_when_the_template_has_one(specs, live_plan):
                     f"{name}/{variant}: слайд {slide.index} — список в одной рамке, "
                     "хотя есть композиция с местом под каждый пункт"
                 )
+
+
+def test_titles_are_written_in_the_colour_the_template_uses_for_titles(specs, plan):
+    """C6: цвет роли — тот, которым шаблон её пишет на большинстве слайдов.
+
+    `vk_education` пишет заголовки синим на 35 слайдах из 36 светлых, а
+    колода выходила с чёрными: синий 4.4:1 не проходил порог мелкого текста,
+    хотя заголовок крупный, и цвет брался у места донора, а не у роли.
+    """
+    from deckwright.schemas import required_contrast
+
+    cfg = load_config(CONFIG)
+    for name, spec in specs:
+        deck, _ = build_deck_ir(spec, plan, cfg.variant("balanced"))
+        for slide in deck.slides:
+            if slide.pattern_id in spec.bookend_ids or slide.background is None:
+                continue
+            title = next((e for e in slide.all_elements() if e.role is SlotRole.TITLE), None)
+            if title is None or title.text is None:
+                continue
+            ground = title.backdrop or slide.background
+            wanted = spec.role_color(SlotRole.TITLE, ground.luminance < 0.5)
+            style = title.text.paragraphs[0].style
+            if wanted is None or wanted.contrast_ratio(ground) < required_contrast(
+                style.size_pt, style.bold
+            ):
+                continue
+            assert style.color.rgb == wanted.rgb, (
+                f"{name}: заголовок слайда {slide.index} цветом {style.color.rgb}, "
+                f"шаблон пишет заголовки {wanted.rgb}"
+            )
+
+
+def _slot(sid: str, role: SlotRole, x: float, y: float, w: float, h: float, text: str = ""):
+    from deckwright.schemas import Provenance, Slot, SourceKind
+
+    inch = 914400
+    return Slot(
+        id=sid, role=role, placeholder_text=text,
+        box=Box(x=int(x * inch), y=int(y * inch), w=int(w * inch), h=int(h * inch)),
+        provenance=Provenance(kind=SourceKind.SLIDE, ref="test"),
+    )
+
+
+def _card_pattern(item_slots: list, fixed: list | None = None, count: int = 3):
+    from deckwright.schemas import Pattern, PatternClass, Provenance, Repeater, SourceKind
+
+    inch = 914400
+    here = Provenance(kind=SourceKind.SLIDE, ref="test")
+    pitch = 3 * inch
+    cards = Repeater(
+        id="rep", item_slots=item_slots, item_box=item_slots[0].box, observed_count=count,
+        max_count=count, pitch_emu=pitch, gutter_emu=inch // 4,
+        member_offsets=[(n * pitch, 0) for n in range(count)], provenance=here,
+    )
+    title = _slot("t", SlotRole.TITLE, 0.5, 0.2, 9, 0.6)
+    return Pattern(
+        id="p", pattern_class=PatternClass.GRID, donor_slide_index=1,
+        slots=[title, *(fixed or [])], repeaters=[cards],
+        content_area=Box(x=0, y=0, w=10 * inch, h=5 * inch), provenance=here,
+    ), title
+
+
+def test_text_in_a_card_takes_the_whole_text_column():
+    """Пункт без подзаголовка занимает колонку карточки целиком.
+
+    `vk_tech`: подзаголовок карточки и описание под ним. Пункт садился в
+    описание под пустым местом подзаголовка. Подпись в кружке над карточкой
+    (holdout) — другая колонка: с ней не сливается.
+    """
+    from deckwright.layout.matcher import _seat, _usable_slots
+    from deckwright.schemas import BlockKind, ContentBlock
+
+    heading = _slot("h", SlotRole.CAPTION, 0.5, 1.0, 2.5, 0.2, "Безопасность")
+    body = _slot("b", SlotRole.BODY, 0.5, 1.3, 2.5, 2.0, "Оцените уровень")
+    circle = _slot("c", SlotRole.CAPTION, 1.4, 0.7, 0.7, 0.7, "1")
+    pattern, title = _card_pattern([heading, body, circle])
+    block = ContentBlock(id="b1", kind=BlockKind.BULLETS, items=["один", "два", "три"])
+    seats = _seat(pattern, block, SlotRole.BULLETS,
+                  _usable_slots(pattern, 10 * 914400, int(5.625 * 914400)), [title.box])
+
+    assert seats is not None and len(seats) == 3
+    first = seats[0][0].box
+    assert first.y == heading.box.y and first.bottom == body.box.bottom
+    assert first.x == body.box.x and first.w == body.box.w  # кружок не вошёл
+
+
+def test_paragraph_below_the_card_icon_not_in_the_heading_place():
+    """`vk_workspace`: рамка заголовка во всю карточку, иконка, под ней текст.
+
+    Абзац без заголовка начинается с места текста под иконкой; показатель
+    остаётся вверху, где шаблон пишет крупно.
+    """
+    from deckwright.layout.matcher import _seat, _usable_slots
+    from deckwright.schemas import BlockKind, ContentBlock
+
+    frame = _slot("f", SlotRole.CAPTION, 0.5, 1.0, 2.6, 3.0, "Заголовок")
+    text = _slot("x", SlotRole.CAPTION, 0.6, 2.6, 2.3, 0.3, "Текст")
+    icon = _slot("i", SlotRole.IMAGE, 0.6, 2.2, 0.3, 0.3)
+    pattern, title = _card_pattern([frame, text], fixed=[icon], count=1)
+    free = _usable_slots(pattern, 10 * 914400, int(5.625 * 914400))
+
+    paragraph = ContentBlock(id="b1", kind=BlockKind.PARAGRAPH, items=["Высокое время…"])
+    seats = _seat(pattern, paragraph, SlotRole.BODY, list(free), [title.box])
+    assert seats is not None
+    box = seats[0][0].box
+    assert box.y == text.box.y and box.bottom == frame.box.bottom
+
+    figure = ContentBlock(id="b2", kind=BlockKind.KPI, items=["42 минуты"])
+    seats = _seat(pattern, figure, SlotRole.KPI_VALUE, list(free), [title.box])
+    assert seats is not None and seats[0][0].box.y == frame.box.y
+
+
+def test_figure_and_its_label_go_to_their_own_places():
+    """Число — в место числа, подпись — в место текста рядом, каждое своим кеглем.
+
+    Holdout: число 115 pt и подпись 20 pt. Вместе в месте числа подпись
+    обязана была влезть кеглем числа. Рядом только бирка — не делится.
+    """
+    from deckwright.layout.matcher import _split_heading
+    from deckwright.schemas import (
+        BlockKind,
+        ContentBlock,
+        Pattern,
+        PatternClass,
+        Provenance,
+        SourceKind,
+    )
+
+    here = Provenance(kind=SourceKind.SLIDE, ref="test")
+    value = _slot("v", SlotRole.KPI_VALUE, 0.5, 1.5, 8, 2.0, "99%")
+    label = _slot("l", SlotRole.BODY, 0.5, 3.7, 7, 0.8, "Описание")
+    tag = _slot("g", SlotRole.KPI_LABEL, 8.6, 1.5, 0.8, 0.2, "Заголовок")
+    block = ContentBlock(id="b", kind=BlockKind.KPI, heading="42 минуты",
+                         items=["Среднее время обнаружения"])
+
+    def pattern(slots):
+        return Pattern(id="p", pattern_class=PatternClass.KPI_ROW, donor_slide_index=1,
+                       slots=slots, content_area=value.box, provenance=here)
+
+    seats = _split_heading(pattern([value, label, tag]), block, [value, label, tag], [])
+    assert [(slot.id, lines) for slot, lines in seats] == [
+        ("v", ["42 минуты"]), ("l", ["Среднее время обнаружения"])
+    ]
+    assert _split_heading(pattern([value, tag]), block, [value, tag], []) is None

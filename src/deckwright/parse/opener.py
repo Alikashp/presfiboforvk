@@ -136,17 +136,74 @@ def _slot_size_pt(element: etree._Element) -> float | None:
 def _text_color(
     element: etree._Element, theme: dict[str, str], clr_map: dict[str, str]
 ) -> Color | None:
-    """Цвет, которым сам шаблон пишет текст в этом плейсхолдере.
+    """Цвет, которым сам шаблон пишет текст в этой фигуре.
 
     Надёжнее вывода по яркости фона: шаблон уже принял решение с учётом
     градиентов и фоновых картинок, о которых парсер ничего не знает.
+
+    Цвет — большинства символов абзаца основного текста, а не первого
+    попавшегося run'а: доноры выделяют акцентом слово, число или
+    подзаголовок карточки, и цвет выделения становился цветом всего места —
+    синий основной текст на `vk_tech` и `vk_workspace`. Символы без своего
+    цвета пишутся цветом абзаца, затем списка стилей фигуры; нет и его —
+    цвет наследуется (None), и решает звено выше.
     """
-    for node in element.iter():
-        if etree.QName(node).localname in ("defRPr", "rPr", "endParaRPr"):
-            color = tokens_mod.resolve_color(node, theme, clr_map)
-            if color is not None:
-                return color
-    return None
+    shared = _declared_color(element.find(f".//{{{A_NS}}}lstStyle"), theme, clr_map)
+    # По абзацам: цвет большинства символов абзаца и его кегль.
+    paragraphs: list[tuple[float, Color | None]] = []
+    for paragraph in element.iter(f"{{{A_NS}}}p"):
+        own = _declared_color(paragraph.find(f"{{{A_NS}}}pPr"), theme, clr_map) or shared
+        counts: dict[str | None, tuple[int, Color | None]] = {}
+        size = 0.0
+        for run in paragraph.findall(f"{{{A_NS}}}r"):
+            text = (run.findtext(f"{{{A_NS}}}t") or "").strip()
+            if not text:
+                continue
+            props = run.find(f"{{{A_NS}}}rPr")
+            color = _declared_color(props, theme, clr_map) or own
+            key = color.rgb if color is not None else None
+            number, _ = counts.get(key, (0, color))
+            counts[key] = (number + len(text), color)
+            if props is not None and props.get("sz"):
+                size = max(size, int(props.get("sz")) / 100)
+        if counts:
+            paragraphs.append((size, max(counts.values(), key=lambda item: item[0])[1]))
+    if not paragraphs:
+        # Пустая рамка (плейсхолдер макета): цвет из её объявлений.
+        for node in element.iter():
+            if etree.QName(node).localname in ("defRPr", "rPr", "endParaRPr"):
+                color = tokens_mod.resolve_color(node, theme, clr_map)
+                if color is not None:
+                    return color
+        return None
+    # Абзацы разного цвета — подзаголовок карточки и её текст («Заголовок»
+    # синим, «Текст» белым на `vk_workspace`). Цвет текста — у абзаца
+    # основного текста: самого мелкого, при равных — последнего.
+    known = [size for size, _ in paragraphs if size > 0]
+    smallest = min(known) if known else 0.0
+    candidates = [color for size, color in paragraphs if size in (smallest, 0.0)]
+    return candidates[-1] if candidates else paragraphs[-1][1]
+
+
+def _declared_color(
+    node: etree._Element | None, theme: dict[str, str], clr_map: dict[str, str]
+) -> Color | None:
+    """Цвет заливки текста, объявленный прямо в этом узле (`rPr`, `pPr`, `lstStyle`).
+
+    Только своя `a:solidFill` текста: цвета подчёркивания, тени и обводки
+    к цвету букв отношения не имеют.
+    """
+    if node is None:
+        return None
+    if etree.QName(node).localname in ("pPr",):
+        node = node.find(f"{{{A_NS}}}defRPr")
+    elif etree.QName(node).localname == "lstStyle":
+        level = node.find(f"{{{A_NS}}}lvl1pPr")
+        node = level.find(f"{{{A_NS}}}defRPr") if level is not None else None
+    if node is None:
+        return None
+    fill = node.find(f"{{{A_NS}}}solidFill")
+    return tokens_mod.resolve_color(fill, theme, clr_map) if fill is not None else None
 
 
 # Какой раздел `p:txStyles` мастера отвечает за роль плейсхолдера. Так же
@@ -181,6 +238,40 @@ def _master_sizes_pt(master) -> dict[str, float]:
         if def_rpr is not None and def_rpr.get("sz"):
             sizes[style_name] = int(def_rpr.get("sz")) / 100
     return sizes
+
+
+def _master_color(
+    master, element: etree._Element, theme: dict[str, str], clr_map: dict[str, str]
+) -> Color | None:
+    """Цвет текста, который плейсхолдер наследует от мастера.
+
+    Та же цепочка, что у кегля: плейсхолдер мастера того же типа, затем
+    раздел `p:txStyles`. Раньше при молчании layout'а шёл цвет, «читаемый
+    по фону» из палитры, — не тот, которым шаблон пишет.
+    """
+    ph = element.find(f".//{{{P_NS}}}ph")
+    wanted = ph.get("type", "body") if ph is not None else "body"
+    for shape in master.placeholders:
+        node = shape._element.find(f".//{{{P_NS}}}ph")
+        kind = node.get("type", "body") if node is not None else "body"
+        if _PH_ROLE.get(kind) is _PH_ROLE.get(wanted):
+            color = _text_color(shape._element, theme, clr_map)
+            if color is not None:
+                return color
+            break
+    style_name = _MASTER_STYLE_BY_ROLE.get(_PH_ROLE.get(wanted), "otherStyle")
+    return _master_style_color(master, style_name, theme, clr_map)
+
+
+def _master_style_color(
+    master, style_name: str, theme: dict[str, str], clr_map: dict[str, str]
+) -> Color | None:
+    """Цвет первого уровня раздела `p:txStyles` мастера."""
+    tx_styles = master._element.find(f"{{{P_NS}}}txStyles")
+    node = tx_styles.find(f"{{{P_NS}}}{style_name}") if tx_styles is not None else None
+    level = node.find(f"{{{A_NS}}}lvl1pPr") if node is not None else None
+    def_rpr = level.find(f"{{{A_NS}}}defRPr") if level is not None else None
+    return tokens_mod.resolve_color(def_rpr, theme, clr_map) if def_rpr is not None else None
 
 
 def _master_placeholder_size_pt(master, element: etree._Element) -> float | None:
@@ -222,7 +313,11 @@ def _layout_slots(
         if shape.width <= 0 or shape.height <= 0:
             continue
         fmt = shape.placeholder_format
-        color = _text_color(shape._element, theme, clr_map) or fallback
+        color = (
+            _text_color(shape._element, theme, clr_map)
+            or _master_color(layout.slide_master, shape._element, theme, clr_map)
+            or fallback
+        )
         role = _placeholder_role(shape._element)
         size = (
             _slot_size_pt(shape._element)
@@ -284,6 +379,16 @@ def _parse(path: Path, font_dir: Path | None) -> TemplateSpec:
         theme_fonts=theme_fonts,
     )
 
+    # Цвета текста из `p:txStyles` мастеров — тоже цвета шаблона: ими пишется
+    # всё, что не объявило своего. Без них палитра не знала цвета, которым
+    # шаблон набирает текст по умолчанию, и вёрстка, взяв его, «придумывала».
+    for master in prs.slide_masters:
+        clr_map = tokens_mod.color_map(master._element)
+        for style_name in ("titleStyle", "bodyStyle", "otherStyle"):
+            color = _master_style_color(master, style_name, theme, clr_map)
+            if color is not None:
+                usage.colors[(color.rgb, tokens_mod.ROLE_TEXT)] += 0
+                usage.color_counts[(color.rgb, tokens_mod.ROLE_TEXT)] += 1
     palette = tokens_mod.build_palette(usage, theme)
     fonts = tokens_mod.build_fonts(usage, _theme_families(theme_root))
     type_scale = tokens_mod.build_type_scale(usage)
@@ -316,7 +421,14 @@ def _parse(path: Path, font_dir: Path | None) -> TemplateSpec:
 
     base_family = fonts[0].family if fonts else "Arial"
     base_size = type_scale[len(type_scale) // 2] if type_scale else FALLBACK_SIZE_PT
-    base_color = Color(rgb=palette[0].color.rgb) if palette else Color(rgb="000000")
+    # Цвет текста, которым шаблон пишет вне плейсхолдеров: `otherStyle`
+    # мастера. Самый частый цвет палитры им не был: у `vk_tech` это серый
+    # `C4C4C4` подложек, и серым выходил весь текст мест без своего цвета.
+    base_color = (
+        _master_style_color(prs.slide_masters[0], "otherStyle", theme, primary_map)
+        if len(prs.slide_masters)
+        else None
+    ) or (Color(rgb=palette[0].color.rgb) if palette else Color(rgb="000000"))
     base_style = TextStyle(font_family=base_family, size_pt=base_size, color=base_color)
 
     # ── Layout'ы ─────────────────────────────────────────────────────────────
@@ -416,6 +528,7 @@ def _parse(path: Path, font_dir: Path | None) -> TemplateSpec:
                 if layout_id in by_layout_id
                 else None
             ),
+            color_of=lambda element: _text_color(element, theme, primary_map),
         )
         if pattern is not None:
             # Локальный фон каждого слота: на чём лежит текст этого места.

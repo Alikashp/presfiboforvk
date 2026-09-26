@@ -837,3 +837,54 @@ def test_donor_picture_with_its_figure_is_a_finding(clean, tmp_path):
     found = donor_data(spoiled, deck, spec)
     assert [issue.slide_index for issue in found] == [2]
     assert found[0].check_id == "integrity.donor_data_leftover"
+
+
+def test_large_text_needs_three_to_one_and_the_templates_own_pair_is_accepted(clean):
+    """Крупному тексту WCAG требует 3:1; пара, которой пишет сам шаблон, — тоже.
+
+    Белый по фирменному синему `vk_education` — 4.4:1: мелкий текст не
+    проходит 4.5, но шаблон пишет им сам, и это решение бренда — цвет
+    остаётся, аудит показывает предупреждение. Пара, которой в шаблоне нет,
+    при том же контрасте — ошибка.
+    """
+    from deckwright.schemas import Color, required_contrast
+
+    assert required_contrast(18.0) == pytest.approx(3.0)
+    assert required_contrast(14.0, bold=True) == pytest.approx(3.0)
+    assert required_contrast(12.0) == 4.5
+
+    deck = clean.deck.model_copy(deep=True)
+    slide = deck.slides[1]
+    slide.background = Color(rgb="0077FF")
+    element = next(e for e in slide.all_elements() if e.text is not None)
+    element.backdrop = None
+    _restyle(element, color=Color(rgb="FFFFFF"), size_pt=12.0)
+
+    class Writes:
+        def __init__(self, answer: bool):
+            self.answer = answer
+
+        def writes_on(self, text, backdrop) -> bool:
+            return self.answer
+
+    def found(spec) -> list[str]:
+        return [
+            issue.check_id
+            for issue in template_fidelity.contrast(slide, spec=spec)
+            if element.id in issue.element_ids
+        ]
+
+    # Не пара шаблона — мелкий текст строго 4.5: ошибка.
+    assert found(Writes(False)) == ["template.low_contrast"]
+    # Пара шаблона — цвет остаётся, но случай не пропускается молча:
+    # предупреждение с числом, одно на элемент.
+    assert found(Writes(True)) == ["template.brand_pair_contrast"]
+    warning = next(
+        issue for issue in template_fidelity.contrast(slide, spec=Writes(True))
+        if element.id in issue.element_ids
+    )
+    assert "пара из шаблона" in warning.message and ":1" in warning.message
+    assert warning.severity.value == "warning"
+    # Крупный текст: 3:1 по WCAG, находки нет.
+    _restyle(element, color=Color(rgb="FFFFFF"), size_pt=24.0)
+    assert found(Writes(False)) == []

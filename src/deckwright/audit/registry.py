@@ -124,6 +124,12 @@ CHECKS: tuple[Check, ...] = (
         "Контраст текста с фоном ниже 4.5:1",
     ),
     _det(
+        "template.brand_pair_contrast",
+        IssueCategory.TEMPLATE,
+        Severity.WARNING,
+        "Контраст ниже порога у пары «цвет по подложке», которой пишет сам шаблон",
+    ),
+    _det(
         "template.unknown_layout",
         IssueCategory.TEMPLATE,
         Severity.ERROR,
