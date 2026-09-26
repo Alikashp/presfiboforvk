@@ -17,7 +17,7 @@ from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from deckwright.schemas.common import Box, Color, Provenance, TextStyle
+from deckwright.schemas.common import Align, Box, Color, Provenance, TextStyle, VAlign
 
 
 class SlotRole(StrEnum):
@@ -86,6 +86,14 @@ class Slot(BaseModel):
     # повторителя). Без него цвет брался у первого слота композиции со
     # стилем, чаще всего у заголовка: чёрный текст на синих карточках.
     text_color: Color | None = None
+    # Выравнивание текста донора в этом месте (`algn`). Писатель ставит его
+    # каждому абзацу явно, и без него всё выходило по левому краю: заголовок
+    # в круге `vk_education`, подписи справа от круга, выровненные вправо.
+    text_align: Align | None = None
+    # Привязка текста в рамке донора по вертикали (`bodyPr anchor`). Цифра
+    # `vk_tech` прижата к низу рамки, над линией: где текст реально стоит,
+    # нужно знать и вёрстке, и аудиту наложений.
+    text_valign: VAlign | None = None
     # Цвет залитой фигуры донора, на которой лежит слот: карточка, панель,
     # сам залитый прямоугольник с текстом. Контраст текста проверяется по
     # нему, а не по фону слайда: на `vk_education` светлый слайд с чёрной
@@ -130,6 +138,10 @@ class Repeater(BaseModel):
     # она бывает разной: на holdout светло-, средне- и тёмно-зелёная, и
     # цвет текста по первой давал чёрный текст на тёмной третьей.
     member_backdrops: list[Color | None] = Field(default_factory=list)
+    # Выравнивание главного текста каждого элемента: элементы по разные
+    # стороны от центра пишутся к нему (подписи вокруг круга `vk_education`:
+    # слева — вправо, справа — влево).
+    member_aligns: list[Align | None] = Field(default_factory=list)
     provenance: Provenance
 
     def offset(self, index: int) -> tuple[int, int]:
@@ -197,6 +209,11 @@ class Pattern(BaseModel):
     # визуализация данных, которых у нас нет. Аудит проверяет, что они не
     # доехали до колоды.
     figure_pictures: list[Box] = Field(default_factory=list)
+    # Графика донора, на которую нельзя писать: линии, иконки, картинки и
+    # фигуры без текста, не служащие подложкой текста. Место текста
+    # кончается там, где она начинается: на `vk_tech` линия под цифрой «7»
+    # лежит внутри рамки числа, и наш текст ложился на неё.
+    decor: list[Box] = Field(default_factory=list)
     # Элементы композиции нарисованы в картинке её layout'а (карточки «01–04»
     # `vk_tech`): layout свой у одного слайда и несёт картинку крупнее
     # половины слайда. Незаполненный элемент такой композиции не убрать —

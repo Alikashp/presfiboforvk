@@ -25,7 +25,13 @@ from deckwright.parse import tokens as tokens_mod
 from deckwright.parse.bookends import bookend_pattern, find_bookends
 from deckwright.parse.fonts import extract_embedded_fonts
 from deckwright.parse.geometry import iter_shapes
-from deckwright.parse.patterns import is_figure_text, mine_slide
+from deckwright.parse.patterns import (
+    _ALGN,
+    is_figure_text,
+    mine_slide,
+    text_align,
+    text_valign,
+)
 from deckwright.parse.recurring import find_recurring
 from deckwright.parse.semantics import classified
 from deckwright.schemas import (
@@ -263,6 +269,29 @@ def _master_color(
     return _master_style_color(master, style_name, theme, clr_map)
 
 
+def _master_align(master, element: etree._Element):
+    """Выравнивание, которое плейсхолдер наследует от мастера.
+
+    Цепочка та же, что у цвета и кегля: плейсхолдер мастера того же типа,
+    затем первый уровень раздела `p:txStyles`.
+    """
+    ph = element.find(f".//{{{P_NS}}}ph")
+    wanted = ph.get("type", "body") if ph is not None else "body"
+    for shape in master.placeholders:
+        node = shape._element.find(f".//{{{P_NS}}}ph")
+        kind = node.get("type", "body") if node is not None else "body"
+        if _PH_ROLE.get(kind) is _PH_ROLE.get(wanted):
+            align = text_align(shape._element)
+            if align is not None:
+                return align
+            break
+    tx_styles = master._element.find(f"{{{P_NS}}}txStyles")
+    style_name = _MASTER_STYLE_BY_ROLE.get(_PH_ROLE.get(wanted), "otherStyle")
+    node = tx_styles.find(f"{{{P_NS}}}{style_name}") if tx_styles is not None else None
+    level = node.find(f"{{{A_NS}}}lvl1pPr") if node is not None else None
+    return _ALGN.get(level.get("algn", "")) if level is not None else None
+
+
 def _master_style_color(
     master, style_name: str, theme: dict[str, str], clr_map: dict[str, str]
 ) -> Color | None:
@@ -327,6 +356,12 @@ def _layout_slots(
         updates = {"color": color}
         if size:
             updates["size_pt"] = size
+        align = text_align(shape._element) or _master_align(layout.slide_master, shape._element)
+        if align is not None:
+            updates["align"] = align
+        valign = text_valign(shape._element)
+        if valign is not None:
+            updates["valign"] = valign
         slots.append(
             Slot(
                 id=f"ph{fmt.idx}",
@@ -546,6 +581,7 @@ def _parse(path: Path, font_dir: Path | None) -> TemplateSpec:
                         for slot in pattern.slots
                     ],
                     "figure_pictures": _figure_pictures(tree),
+                    "decor": _decor(tree, pattern, slide_w, slide_h),
                     "baked_items": bool(pattern.repeaters)
                     and _layout_draws_items(slide.slide_layout, layout_use, slide_w, slide_h),
                     "repeaters": [
@@ -560,7 +596,11 @@ def _parse(path: Path, font_dir: Path | None) -> TemplateSpec:
                                         effective,
                                     )
                                     for dx, dy in repeater.member_offsets
-                                ]
+                                ],
+                                "member_aligns": [
+                                    _member_align(tree, _text_of_member(repeater, dx, dy))
+                                    for dx, dy in repeater.member_offsets
+                                ],
                             }
                         )
                         for repeater in pattern.repeaters
@@ -662,6 +702,12 @@ def _layout_draws_items(layout, layout_use: dict[int, int], slide_w: int, slide_
     return False
 
 
+# Роли мест, которые не текст: их рамки — не повод считать фигуру подложкой.
+_NOT_TEXT_ROLES = frozenset(
+    {SlotRole.IMAGE, SlotRole.ICON, SlotRole.CHART, SlotRole.TABLE, SlotRole.DECOR, SlotRole.LOGO}
+)
+
+
 def _figure_pictures(tree) -> list[Box]:
     """Картинки слайда, на которых стоит число-показатель шаблона."""
     shapes = [(element, box) for element, box, _ in iter_shapes(tree) if box is not None]
@@ -682,6 +728,47 @@ def _figure_pictures(tree) -> list[Box]:
     figures = [box for box in pictures if any(_covers_most(n, box) for n in numbers)]
     # И части той же фигуры: дуга кольца — отдельная картинка внутри него.
     return [box for box in pictures if any(_covers_most(box, f) for f in figures)]
+
+
+_DECOR_TAGS = frozenset({"sp", "pic", "cxnSp"})
+_THIN = 91_440  # 0.1″: линия
+_ICON = 548_640  # 0.6″: значок
+
+
+def _decor(tree, pattern, slide_w: int, slide_h: int) -> list[Box]:
+    """Графика донора, на которую текст не должен заходить.
+
+    Фигуры без своего текста: линии, иконки, картинки. Не входят подложки —
+    фигуры, под которыми целиком лежит текстовое место (карточка, панель), —
+    и фон во весь слайд: писать на них текст и задумано.
+    """
+    texts = [slot.box for slot in pattern.slots if slot.role not in _NOT_TEXT_ROLES]
+    for repeater in pattern.repeaters:
+        for dx, dy in repeater.member_offsets:
+            texts += [
+                Box(x=slot.box.x + dx, y=slot.box.y + dy, w=slot.box.w, h=slot.box.h)
+                for slot in repeater.item_slots
+                if slot.role not in _NOT_TEXT_ROLES
+            ]
+    found = []
+    for element, box, _ in iter_shapes(tree):
+        if box is None or etree.QName(element).localname not in _DECOR_TAGS:
+            continue
+        body = element.find(f"{{{P_NS}}}txBody")
+        if body is not None and "".join(n.text or "" for n in body.iter(f"{{{A_NS}}}t")).strip():
+            continue
+        if box.w * box.h >= 0.5 * slide_w * slide_h:
+            continue
+        if any(_covers_most(text, box) for text in texts):
+            continue
+        # Только линии и значки. Крупная фигура — поверхность, на которой
+        # донор и сам ставит текст (кольцо вокруг заголовка `vk_education`,
+        # панель под заголовком `vk_tech`); по её габаритам не отличить
+        # наложение от замысла.
+        if min(box.w, box.h) > _THIN and max(box.w, box.h) > _ICON:
+            continue
+        found.append(box)
+    return found
 
 
 def _covers_most(inner: Box, outer: Box) -> bool:
@@ -706,6 +793,26 @@ def _text_of_member(repeater, dx: int, dy: int) -> Box:
         default=repeater.item_box,
     )
     return Box(x=main.x + dx, y=main.y + dy, w=main.w, h=main.h)
+
+
+def _member_align(tree, box: Box):
+    """Выравнивание текста фигуры донора, стоящей в этой рамке."""
+    tolerance = 45_720  # 1/20 дюйма
+    for element, shape_box, _ in iter_shapes(tree):
+        if shape_box is None:
+            continue
+        if all(
+            abs(a - b) <= tolerance
+            for a, b in zip(
+                (shape_box.x, shape_box.y, shape_box.w, shape_box.h),
+                (box.x, box.y, box.w, box.h),
+                strict=True,
+            )
+        ):
+            align = text_align(element)
+            if align is not None:
+                return align
+    return None
 
 
 def _parser_fingerprint() -> str:

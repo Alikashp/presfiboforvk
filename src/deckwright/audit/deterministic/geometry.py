@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from deckwright.audit.registry import check
 from deckwright.schemas import (
+    EMU_PER_POINT,
     Box,
     DeckIR,
     FixKind,
@@ -18,6 +19,7 @@ from deckwright.schemas import (
     SlideIR,
     SlotRole,
     TemplateSpec,
+    VAlign,
 )
 
 # Какую долю меньшего элемента разрешено перекрыть. Рамки шаблона
@@ -113,6 +115,66 @@ def overlaps(slide: SlideIR) -> list[Issue]:
                 )
             )
     return found
+
+
+# Поле текстовой рамки по умолчанию (OOXML): 0.05″ сверху и снизу.
+_INSET = 45_720
+# Пересечение уже этого — касание краем, а не наложение.
+_TOUCH = 18_288  # 0.02″
+
+
+def text_over_decor(slide: SlideIR, spec: TemplateSpec) -> list[Issue]:
+    """Текст, лёгший на графику шаблона: линию, значок.
+
+    `overlaps` сравнивает только наши элементы между собой, а графика донора
+    в IR не попадает — она приезжает клонированием, и линия под цифрой на
+    `vk_tech` оставалась незамеченной под нашим текстом. Графика берётся из
+    разбора шаблона (`Pattern.decor`), текст — полосой, которую он реально
+    занимает: строки × кегль с учётом привязки рамки по вертикали.
+    """
+    pattern = next((p for p in spec.patterns if p.id == slide.pattern_id), None)
+    if pattern is None or not pattern.decor:
+        return []
+    found: list[Issue] = []
+    for element in slide.all_elements():
+        if element.text is None or not element.text.paragraphs:
+            continue
+        band = text_band(element)
+        for item in pattern.decor:
+            hit = item.intersection(band)
+            # Край в край — касание; линия вплотную под последней строкой
+            # глазом читается как подчёркивание, но это не наложение.
+            if hit is None or hit.w <= _TOUCH or item.contains(band):
+                continue
+            found.append(
+                _issue(
+                    "layout.text_over_decor",
+                    slide.index,
+                    f"{element.id}: текст ложится на графику шаблона "
+                    f"({item.w / 914400:.2f}×{item.h / 914400:.2f}″)",
+                    element_ids=[element.id],
+                    bbox=hit,
+                )
+            )
+            break
+    return found
+
+
+def text_band(element) -> Box:
+    """Полоса рамки, которую текст элемента реально занимает."""
+    box = element.box
+    text = element.text
+    style = text.paragraphs[0].style
+    lines = text.used_lines or len(text.paragraphs)
+    size = max(paragraph.style.size_pt for paragraph in text.paragraphs)
+    height = min(box.h, int(lines * size * 1.2 * EMU_PER_POINT) + 2 * _INSET)
+    if style.valign is VAlign.BOTTOM:
+        top = box.bottom - height
+    elif style.valign is VAlign.MIDDLE:
+        top = box.y + (box.h - height) // 2
+    else:
+        top = box.y
+    return Box(x=box.x, y=top, w=box.w, h=height)
 
 
 def margins(slide: SlideIR, deck: DeckIR, spec: TemplateSpec) -> list[Issue]:
@@ -266,6 +328,7 @@ def run(deck: DeckIR, spec: TemplateSpec) -> list[Issue]:
     for slide in deck.slides:
         found.extend(out_of_bounds(slide, deck))
         found.extend(overlaps(slide))
+        found.extend(text_over_decor(slide, spec))
         found.extend(margins(slide, deck, spec))
         found.extend(off_grid(slide, spec))
         found.extend(stretched_images(slide))
@@ -280,5 +343,7 @@ __all__ = [
     "overlaps",
     "run",
     "stretched_images",
+    "text_band",
+    "text_over_decor",
     "text_overflow",
 ]

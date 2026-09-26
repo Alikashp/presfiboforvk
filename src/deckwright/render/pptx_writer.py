@@ -29,7 +29,7 @@ from lxml import etree
 from pptx import Presentation
 from pptx.dml.color import RGBColor
 from pptx.enum.shapes import MSO_SHAPE_TYPE
-from pptx.enum.text import PP_ALIGN
+from pptx.enum.text import MSO_ANCHOR, PP_ALIGN
 from pptx.util import Emu, Pt
 
 from deckwright.parse.geometry import iter_shapes
@@ -45,9 +45,16 @@ from deckwright.schemas import (
     SlotRole,
     TemplateSpec,
     TextStyle,
+    VAlign,
 )
 from deckwright.visuals.charts import add_chart
 from deckwright.visuals.tables import add_table
+
+_ANCHOR = {
+    VAlign.TOP: MSO_ANCHOR.TOP,
+    VAlign.MIDDLE: MSO_ANCHOR.MIDDLE,
+    VAlign.BOTTOM: MSO_ANCHOR.BOTTOM,
+}
 
 _ALIGN = {
     Align.LEFT: PP_ALIGN.LEFT,
@@ -276,6 +283,11 @@ def _render_element(
     box = element.box
     textbox = slide.shapes.add_textbox(Emu(box.x), Emu(box.y), Emu(box.w), Emu(box.h))
     textbox.text_frame.word_wrap = True
+    # Привязка по вертикали — из IR: место, обрезанное по графике донора,
+    # уже не совпадает с его рамкой и пишется новой надписью, а число у
+    # донора прижато к низу рамки, над линией.
+    if element.text is not None and element.text.paragraphs:
+        textbox.text_frame.vertical_anchor = _ANCHOR[element.text.paragraphs[0].style.valign]
     _fill_text_frame(textbox.text_frame, element, styled=True)
     return box
 
@@ -388,6 +400,7 @@ def render_deck(
         _drop_donor_figures(slide, donor_numbers, filled)
         _drop_sibling_figures(slide, patterns.get(slide_ir.pattern_id), slide_ir)
         _drop_emptied_panels(slide, donor_text, filled, deck)
+        _drop_orphan_decor(slide, patterns.get(slide_ir.pattern_id), donor_text, filled)
 
         _drop_unfilled_placeholders(slide, filled)
         if slide_ir.speaker_notes:
@@ -608,6 +621,32 @@ def _drop_emptied_panels(slide, donor_text: list[Box], filled: list[Box], deck: 
                 other.getparent().remove(other)
         element.getparent().remove(element)
         removed += 1
+    return removed
+
+
+def _drop_orphan_decor(slide, pattern, donor_text: list[Box], filled: list[Box]) -> int:
+    """Убирает графику донора, оставшуюся от незаполненного места.
+
+    Линия под цифрой «7» на `vk_tech` лежит внутри рамки этой цифры. Место
+    не досталось нашему содержанию — рамка очищена, а линия висела под
+    пустотой. Графика уходит, если лежит в рамке донорского текста, на
+    которую не пришлось ничего нашего.
+    """
+    if pattern is None or not pattern.decor:
+        return 0
+    empty = [
+        frame
+        for frame in donor_text
+        if not any(_share_inside(taken, frame) >= _PANEL_USE_SHARE for taken in filled)
+    ]
+    removed = 0
+    for item in pattern.decor:
+        # Большая часть графики — в пустой рамке: линия донора выступает за
+        # рамку цифры на 0.12″, и «целиком внутри» её не находило.
+        if any(_share_inside(item, frame) >= _PANEL_USE_SHARE for frame in empty) and (
+            _remove_shape_at(slide, item)
+        ):
+            removed += 1
     return removed
 
 

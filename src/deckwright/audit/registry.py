@@ -64,6 +64,12 @@ CHECKS: tuple[Check, ...] = (
         "Два элемента накладываются друг на друга",
     ),
     _det(
+        "layout.text_over_decor",
+        IssueCategory.LAYOUT,
+        Severity.ERROR,
+        "Текст накладывается на графику шаблона: линию, иконку, картинку",
+    ),
+    _det(
         "layout.text_overflow",
         IssueCategory.LAYOUT,
         Severity.WARNING,

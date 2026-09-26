@@ -988,7 +988,7 @@ def test_figure_and_its_label_go_to_their_own_places():
     """Число — в место числа, подпись — в место текста рядом, каждое своим кеглем.
 
     Holdout: число 115 pt и подпись 20 pt. Вместе в месте числа подпись
-    обязана была влезть кеглем числа. Рядом только бирка — не делится.
+    обязана была влезть кеглем числа.
     """
     from deckwright.layout.matcher import _split_heading
     from deckwright.schemas import (
@@ -1015,4 +1015,158 @@ def test_figure_and_its_label_go_to_their_own_places():
     assert [(slot.id, lines) for slot, lines in seats] == [
         ("v", ["42 минуты"]), ("l", ["Среднее время обнаружения"])
     ]
-    assert _split_heading(pattern([value, tag]), block, [value, tag], []) is None
+    # Рядом только бирка: рамка числа делится сама — сверху число, снизу
+    # подпись, каждое своим кеглем (`vk_tech`: «42 минуты» мелко одним
+    # абзацем с подписью в рамке «91%»).
+    seats = _split_heading(pattern([value, tag]), block, [value, tag], [])
+    (top, figure), (bottom, caption) = seats
+    assert figure == ["42 минуты"] and caption == ["Среднее время обнаружения"]
+    assert top.role is SlotRole.KPI_VALUE and bottom.role is SlotRole.BODY
+    assert top.box.bottom <= bottom.box.y and bottom.box.bottom == value.box.bottom
+    # Низкая рамка, где двум строкам не уместиться, — не делится.
+    low = _slot("v", SlotRole.KPI_VALUE, 0.5, 1.5, 8, 0.5, "99%")
+    assert _split_heading(pattern([low, tag]), block, [low, tag], []) is None
+
+
+def test_label_below_the_figure_inside_its_frame_is_its_place():
+    """Место подписи заходит в низ рамки числа — это его подпись, а не помеха.
+
+    `vk_tech`: рамка «91%» выше самой цифры, и «Описание показателя» лежит в
+    её нижней части. Раньше такое место отбрасывалось как наложение, и
+    число с подписью писались вместе мелко. Рамка числа кончается там, где
+    начинается подпись; линия донора в рамке — граница снизу.
+    """
+    from deckwright.layout.matcher import _split_heading
+    from deckwright.schemas import (
+        BlockKind,
+        ContentBlock,
+        Pattern,
+        PatternClass,
+        Provenance,
+        SourceKind,
+    )
+
+    inch = 914400
+    value = _slot("v", SlotRole.KPI_VALUE, 0.2, 2.0, 4.3, 1.5, "91%")
+    label = _slot("l", SlotRole.BODY, 0.3, 3.4, 3.5, 0.4, "Описание показателя")
+    line = Box(x=int(0.3 * inch), y=int(3.9 * inch), w=int(2.6 * inch), h=int(0.03 * inch))
+    pattern = Pattern(
+        id="p", pattern_class=PatternClass.KPI_ROW, donor_slide_index=1, slots=[value, label],
+        content_area=value.box, decor=[line], provenance=Provenance(kind=SourceKind.SLIDE, ref="t"),
+    )
+    block = ContentBlock(id="b", kind=BlockKind.KPI, heading="42 минуты",
+                         items=["Среднее время обнаружения"])
+    (figure, _), (caption, _) = _split_heading(pattern, block, [value, label], [])
+    assert caption.id == "l"
+    assert figure.box.bottom <= label.box.y
+
+
+def test_text_place_stops_before_the_templates_line():
+    """Место текста кончается раньше линии донора, лежащей внутри его рамки."""
+    from deckwright.layout.matcher import _DECOR_GAP, _clear_of_decor
+
+    inch = 914400
+    frame = Box(x=0, y=2 * inch, w=3 * inch, h=2 * inch)
+    line = Box(x=0, y=int(3.9 * inch), w=3 * inch, h=int(0.03 * inch))
+    clipped = _clear_of_decor(frame, [line])
+    assert clipped.y == frame.y and clipped.bottom == line.y - _DECOR_GAP
+    # Подложка во всю рамку — не граница.
+    panel = Box(x=-inch, y=inch, w=6 * inch, h=4 * inch)
+    assert _clear_of_decor(frame, [panel]) == frame
+    # Значок у левого края во всю высоту — граница слева.
+    icon = Box(x=0, y=2 * inch, w=inch // 3, h=2 * inch)
+    assert _clear_of_decor(frame, [icon]).x == icon.right + _DECOR_GAP
+    # Значок в середине высокой рамки — начало текста не двигается, срезается низ.
+    middle = Box(x=inch // 4, y=3 * inch, w=inch // 3, h=inch // 3)
+    kept = _clear_of_decor(frame, [middle])
+    assert (kept.x, kept.y) == (frame.x, frame.y) and kept.bottom == middle.y - _DECOR_GAP
+
+
+def test_alignment_is_read_from_the_donor():
+    """Выравнивание текста — донора: заголовок в круге по центру, подпись справа.
+
+    Раньше выравнивание не читалось вовсе, и писатель ставил каждому абзацу
+    левый край: заголовок в круге `vk_education` выходил прижатым влево.
+    """
+    from lxml import etree
+
+    from deckwright.layout.matcher import _align_of
+    from deckwright.parse.patterns import text_align, text_valign
+    from deckwright.schemas import Align, VAlign
+
+    def shape(body: str):
+        return etree.fromstring(
+            '<p:sp xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" '
+            'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">'
+            f"<p:txBody>{body}</p:txBody></p:sp>"
+        )
+
+    centred = shape('<a:bodyPr anchor="b"/><a:p><a:pPr algn="ctr"/><a:r><a:t>Заголовок</a:t>'
+                    "</a:r></a:p>")
+    assert text_align(centred) is Align.CENTER
+    assert text_valign(centred) is VAlign.BOTTOM
+    inherited = shape('<a:bodyPr/><a:lstStyle><a:lvl1pPr algn="r"/></a:lstStyle>'
+                      "<a:p><a:r><a:t>Подпись</a:t></a:r></a:p>")
+    assert text_align(inherited) is Align.RIGHT
+    assert text_align(shape("<a:bodyPr/><a:p><a:r><a:t>Текст</a:t></a:r></a:p>")) is None
+
+    slot = _slot("t", SlotRole.TITLE, 0, 0, 3, 1).model_copy(update={"text_align": Align.CENTER})
+    assert _align_of(slot) is Align.CENTER
+    assert _align_of(None) is Align.LEFT
+
+
+def test_circle_title_is_centred_in_the_built_deck(specs, live_plan):
+    """Собранная колода: место, которое донор центрирует, пишется по центру."""
+    from deckwright.schemas import Align
+
+    cfg = load_config(CONFIG)
+    for name, spec in specs:
+        patterns = {pattern.id: pattern for pattern in spec.patterns}
+        deck, _ = build_deck_ir(spec, live_plan, cfg.variant("balanced"))
+        for slide in deck.slides:
+            pattern = patterns.get(slide.pattern_id)
+            if pattern is None:
+                continue
+            donor = next((s for s in pattern.slots if s.role is SlotRole.TITLE), None)
+            title = next((e for e in slide.all_elements() if e.role is SlotRole.TITLE), None)
+            if donor is None or title is None or donor.text_align is not Align.CENTER:
+                continue
+            assert title.text.paragraphs[0].style.align is Align.CENTER, (name, slide.index)
+
+
+def test_figure_in_the_donors_ring_is_not_a_split():
+    """Число в кольце донора — не крупный показатель, а кольцо с чужой долей.
+
+    Предпочтение «показатель делится» увело слайд с данными `vk_education`
+    в композицию с кольцами «10%»: число садилось в кольцо, кольцо
+    оставалось и изображало данные, которых нет.
+    """
+    from deckwright.layout.matcher import _figure_unsplit
+    from deckwright.schemas import (
+        BlockKind,
+        ContentBlock,
+        Pattern,
+        PatternClass,
+        Provenance,
+        SlideIntent,
+        SlidePlan,
+        SourceKind,
+    )
+
+    here = Provenance(kind=SourceKind.SLIDE, ref="test")
+    value = _slot("v", SlotRole.KPI_VALUE, 1, 1.5, 2.4, 0.8, "10%")
+    label = _slot("l", SlotRole.BODY, 1.2, 2.4, 2.0, 0.5, "Подпись")
+    title = _slot("t", SlotRole.TITLE, 0.5, 0.2, 9, 0.6)
+    ring = Box(x=914400, y=int(1.2 * 914400), w=int(2.4 * 914400), h=int(2.4 * 914400))
+    slide = SlidePlan(index=2, intent=SlideIntent.EVIDENCE, takeaway_title="Вывод", blocks=[
+        ContentBlock(id="b", kind=BlockKind.KPI, heading="42 минуты", items=["Среднее время"])
+    ])
+    strategy = Strategy.from_config(load_config(CONFIG).variant("dense"))
+
+    def pattern(figures):
+        return Pattern(id="p", pattern_class=PatternClass.KPI_ROW, donor_slide_index=1,
+                       slots=[title, value, label], content_area=ring, figure_pictures=figures,
+                       provenance=here)
+
+    assert not _figure_unsplit(pattern([]), _Spec, slide, strategy)
+    assert _figure_unsplit(pattern([ring]), _Spec, slide, strategy)
