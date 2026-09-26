@@ -23,6 +23,8 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
+from collections.abc import Callable
+from contextvars import ContextVar
 from dataclasses import dataclass
 from itertools import pairwise
 
@@ -31,6 +33,7 @@ from lxml import etree
 from deckwright.parse.geometry import iter_shapes
 from deckwright.schemas import (
     Box,
+    Color,
     Pattern,
     PatternClass,
     Provenance,
@@ -84,6 +87,20 @@ class _Shape:
     tag: str
     text: str
     size_pt: float
+
+
+# Чем разрешить цвет текста фигуры в RGB: тема и карта цветов мастера есть
+# только у разбора шаблона. Задаётся на время разбора одного слайда
+# (`mine_slide`), чтобы не тянуть тему через весь поиск повторителей.
+_COLOR_OF: ContextVar[Callable[[etree._Element], Color | None] | None] = ContextVar(
+    "color_of", default=None
+)
+
+
+def _color_of(element: etree._Element) -> Color | None:
+    """Цвет, которым донор пишет текст этой фигуры; None — не объявлен."""
+    resolve = _COLOR_OF.get()
+    return resolve(element) if resolve is not None else None
 
 
 def _text_of(element: etree._Element) -> str:
@@ -464,6 +481,7 @@ def _slots_on(texts: list[_Shape], slide_h: int, slide_w: int, prefix: str) -> l
                 role=role,
                 box=shape.box,
                 placeholder_text=shape.text[:80],
+                text_color=_color_of(shape.element),
                 provenance=Provenance(kind=SourceKind.SLIDE, ref="элемент повторителя"),
             )
         )
@@ -605,6 +623,7 @@ def _slots_of(
                 role=role,
                 box=shape.box,
                 placeholder_text=shape.text[:80],
+                text_color=_color_of(shape.element),
                 provenance=Provenance(kind=SourceKind.SLIDE, ref="элемент повторителя"),
             )
         )
@@ -620,6 +639,7 @@ def mine_slide(
     default_style: TextStyle,
     is_dark: bool = False,
     inherited_slots: dict[SlotRole, Slot] | None = None,
+    color_of: Callable[[etree._Element], Color | None] | None = None,
 ) -> Pattern | None:
     """Разбирает слайд-пример в композиционный паттерн.
 
@@ -629,13 +649,61 @@ def mine_slide(
     заголовком композиции становилась крупная цифра рядом («987 654 321» на
     holdout-шаблоне).
     """
-    inherited_slots = inherited_slots or {}
+    token = _COLOR_OF.set(color_of)
+    try:
+        return _mine_slide(
+            container, slide_index, slide_w, slide_h, layout_id, default_style, is_dark,
+            inherited_slots or {},
+        )
+    finally:
+        _COLOR_OF.reset(token)
+
+
+def _inherited_color(role: SlotRole, inherited_slots: dict[SlotRole, Slot]) -> Color | None:
+    """Цвет, который место этой роли наследует от макета."""
+    for wanted in (role, SlotRole.BODY):
+        slot = inherited_slots.get(wanted)
+        if slot is not None and slot.style is not None:
+            return slot.style.color
+    return None
+
+
+def _mine_slide(
+    container: etree._Element,
+    slide_index: int,
+    slide_w: int,
+    slide_h: int,
+    layout_id: str | None,
+    default_style: TextStyle,
+    is_dark: bool,
+    inherited_slots: dict[SlotRole, Slot],
+) -> Pattern | None:
     shapes = _collect(container, slide_w, slide_h)
     shapes.extend(_inherited_titles(container, inherited_slots, shapes))
     if not shapes:
         return None
 
     repeaters, consumed = _find_repeaters(shapes, slide_index, slide_w, slide_h)
+    # Место повторителя без своего цвета пишется унаследованным: у
+    # плейсхолдера макета той же роли, у основного текста, у мастера. Иначе
+    # вёрстка брала цвет первого слота композиции со стилем — синего
+    # заголовка `vk_education` — и красила им текст карточек.
+    repeaters = [
+        repeater.model_copy(
+            update={
+                "item_slots": [
+                    slot
+                    if slot.text_color is not None
+                    else slot.model_copy(
+                        update={"text_color": _inherited_color(slot.role, inherited_slots)
+                                or default_style.color}
+                    )
+                    for slot in repeater.item_slots
+                ]
+            }
+        )
+        for repeater in repeaters
+    ]
 
     own = [
         shape
@@ -669,6 +737,17 @@ def mine_slide(
             style = inherited.style
         else:
             style = default_style
+        # Цвет — тот, которым донор пишет эту фигуру; не объявлен — у
+        # плейсхолдера макета; и только потом цвет текста мастера. Раньше
+        # цвет не читался вовсе, и всему шёл самый частый цвет палитры —
+        # серый `C4C4C4` у `vk_tech`, чёрный на тёмных слайдах `vk_workspace`.
+        color = _color_of(shape.element) or (
+            inherited.style.color
+            if inherited is not None and inherited.style is not None
+            else None
+        )
+        if color is not None:
+            style = style.model_copy(update={"color": color})
         slots.append(
             Slot(
                 id=f"s{slide_index}_{position}",

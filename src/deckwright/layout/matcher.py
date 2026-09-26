@@ -52,7 +52,9 @@ from deckwright.schemas import (
     TextContent,
     TextStyle,
     readable_text_color,
+    required_contrast,
 )
+from deckwright.schemas.common import LARGE_TEXT_PT
 from deckwright.visuals.charts import series_from_pack, series_unit
 
 # Намерения, которым хватает одного заголовка.
@@ -890,40 +892,73 @@ def _text_color(
     is_dark: bool,
     background: Color | None,
     spec: TemplateSpec | None = None,
+    slot=None,
+    size_pt: float = 0.0,
+    bold: bool = False,
 ) -> Color:
     """Цвет текста для роли — взятый из самого шаблона и проверенный на фоне.
 
-    Порядок предпочтений: цвет, которым шаблон пишет текст этой роли здесь;
-    затем цвет любого его текстового слота; и только если шаблон не сказал
-    ничего — выбор по яркости фона.
+    Порядок предпочтений: цвет, которым шаблон пишет в этом самом месте
+    (`slot`); затем — текст этой роли в композиции; затем цвет любого её
+    текстового слота; и только если шаблон не сказал ничего — выбор по
+    яркости фона.
 
     Так правильнее, чем всегда считать по фону: шаблон уже решил, каким
     цветом здесь писать, и его решение учитывает градиенты, фоновые картинки
     и декор, о которых мы не знаем ничего.
 
-    Но взятый цвет обязан пройти проверку контрастом. Композиция снимается со
-    слайда-примера, а фон слайду назначает его layout — и это законно разные
-    слайды: на `vk_workspace` композиция со светлого примера приезжала на
-    чёрный фон, и текст получался чёрным по чёрному. Не влезающий в порог
-    цвет заменяется на тот, что читается: обратное — отдать колоду, которую
-    аудит забракует, а человек не прочитает.
+    Но взятый цвет обязан пройти проверку контрастом — порогом для этого
+    кегля: крупному тексту WCAG требует 3:1, основному 4.5:1. Композиция
+    снимается со слайда-примера, а фон слайду назначает его layout — и это
+    законно разные слайды: на `vk_workspace` композиция со светлого примера
+    приезжала на чёрный фон, и текст получался чёрным по чёрному. Не
+    влезающий в порог цвет заменяется на тот, что читается.
     """
-    chosen: Color | None = None
-    for slot in container.slots:
-        if slot.role is role and slot.style is not None:
-            chosen = slot.style.color
-            break
-    if chosen is None:
-        for slot in container.slots:
-            if slot.style is not None:
-                chosen = slot.style.color
-                break
-
     # Фон бывает неизвестен: композиция снята с донора, а фон слайду назначает
     # его layout. Судим тогда по яркости шаблона — ею фон и окажется.
     judged = background or (Color(rgb="000000") if is_dark else Color(rgb="FFFFFF"))
-    if chosen is not None and chosen.contrast_ratio(judged) >= MIN_CONTRAST:
-        return chosen
+    needed = required_contrast(size_pt, bold, MIN_CONTRAST)
+
+    def readable(color: Color | None) -> bool:
+        if color is None:
+            return False
+        ratio = color.contrast_ratio(judged)
+        # Пара, которой шаблон пишет сам, — решение бренда; ей хватает
+        # порога крупного текста. Белый по фирменному синему `vk_education`
+        # (4.4:1) иначе становился чёрным — «чёрный текст на синих подложках».
+        return ratio >= needed or (
+            spec is not None
+            and spec.writes_on(color, judged)
+            and ratio >= required_contrast(LARGE_TEXT_PT, False, MIN_CONTRAST)
+        )
+
+    own = (
+        slot.text_color or (slot.style.color if slot.style is not None else None)
+        if slot is not None
+        else None
+    )
+    candidates: list[Color | None] = []
+    # Обложка и финал — слайды шаблона целиком, с заменой только текста: их
+    # место пишется своим цветом (чёрный заголовок финала `vk_education`
+    # при синих заголовках содержательных слайдов).
+    if spec is not None and getattr(container, "id", None) in spec.bookend_ids:
+        candidates.append(own)
+    if spec is not None:
+        # Место на цветной подложке: чем шаблон пишет на ней самой (белым по
+        # синей карточке); затем — цвет роли на фоне этой яркости.
+        card = getattr(slot, "backdrop", None)
+        if card is not None:
+            candidates.extend(_written_on(card, spec))
+        candidates.append(spec.role_color(role, judged.luminance < 0.5))
+    candidates.append(own)
+    candidates.extend(
+        candidate.style.color
+        for candidate in container.slots
+        if candidate.role is role and candidate.style is not None
+    )
+    for candidate in candidates:
+        if readable(candidate):
+            return candidate
 
     # Донорский цвет на нашем фоне не читается (или его нет). Прежде чем
     # придумывать свой, спрашиваем палитру шаблона: колода обязана быть
@@ -1076,7 +1111,9 @@ def _data_element(
             cell = cell.model_copy(update={"size_pt": size})
             table = table.model_copy(update={"cell_style": cell})
             fill = brand[0]
-            header = cell.model_copy(update={"color": _header_text(fill), "bold": True})
+            header = cell.model_copy(
+                update={"color": _header_text(fill, spec, cell.size_pt), "bold": True}
+            )
             values = [_number(row[-1]) for row in table.rows]
             keys = (
                 _key_points(values, plan_slide, pack)
@@ -1133,17 +1170,44 @@ def _table_size(table: TableContent, box: Box, spec: TemplateSpec, body: float) 
     return steps[-1]
 
 
-def _header_text(fill: Color) -> Color:
-    """Текст шапки на заливке бренда.
+def _header_text(fill: Color, spec: TemplateSpec | None = None, size_pt: float = 0.0) -> Color:
+    """Текст шапки на заливке бренда — цветом, которым шаблон пишет на ней.
 
-    Шапка набрана крупно и полужирно — для неё порог 3:1. На насыщенной
-    заливке бренда шаблоны пишут белым (синие карточки всех трёх шаблонов
-    VK), и белый берётся, если читается; иначе — самый контрастный.
+    Шаблон уже писал на подложках этого цвета: карточки, панели, плашки
+    его слайдов-примеров. Самый частый их цвет текста, если читается при
+    полужирной шапке, — и берётся. Только если шаблон на такой заливке не
+    писал ничего, — белый на насыщенной (так пишут синие карточки всех трёх
+    шаблонов VK), иначе самый контрастный.
     """
+    needed = required_contrast(size_pt, True, MIN_CONTRAST)
+    if spec is not None:
+        for color in _written_on(fill, spec):
+            if color.contrast_ratio(fill) >= needed:
+                return color
     white = Color(rgb="FFFFFF")
     if _saturation(fill) >= 0.5 and white.contrast_ratio(fill) >= GRAPHIC_CONTRAST:
         return white
     return readable_text_color_on(fill)
+
+
+def _written_on(fill: Color, spec: TemplateSpec) -> list[Color]:
+    """Цвета текста шаблона на подложке цвета `fill`, от частого к редкому."""
+    seen: dict[str, tuple[int, Color]] = {}
+
+    def count(backdrop: Color | None, color: Color | None) -> None:
+        if backdrop is None or color is None or backdrop.rgb != fill.rgb:
+            return
+        number, _ = seen.get(color.rgb, (0, color))
+        seen[color.rgb] = (number + 1, color)
+
+    for pattern in spec.patterns:
+        for slot in pattern.slots:
+            count(slot.backdrop, slot.text_color or (slot.style.color if slot.style else None))
+        for repeater in pattern.repeaters:
+            for backdrop in repeater.member_backdrops:
+                for slot in repeater.item_slots:
+                    count(backdrop, slot.text_color)
+    return [color for _, color in sorted(seen.values(), key=lambda item: -item[0])]
 
 
 def _table_box(table: TableContent, style: TextStyle, slot: Box, roomy: Box) -> Box:
@@ -1508,7 +1572,9 @@ def _speaker_elements(
         if speaker.style is not None
         else role_typical(spec, SlotRole.BODY)
     )
-    color = _text_color(pattern, SlotRole.SPEAKER, pattern.is_dark, _under(speaker, None), spec)
+    color = _text_color(
+        pattern, SlotRole.SPEAKER, pattern.is_dark, _under(speaker, None), spec, slot=speaker
+    )
     style = TextStyle(font_family=font_family, size_pt=size or 12.0, color=color)
     return [
         Element(
@@ -1617,6 +1683,9 @@ def build_slide_ir(
                                 is_dark,
                                 _under(title_slot, background),
                                 spec,
+                                slot=title_slot,
+                                size_pt=title_size,
+                                bold=True,
                             ),
                         ),
                     )
@@ -1686,15 +1755,23 @@ def build_slide_ir(
         placed = [
             (seat.box if seat is not None else box, text) for seat, text in seats
         ]
-        # Цвет — по подложке каждого места: карточки одного ряда бывают
-        # разного цвета.
-        colors = [
-            _text_color(container, role, is_dark, _under(seat, background), spec)
-            for seat, _ in seats
-        ]
         fits = (
             _fit_seats(placed, metrics, block_ladder, start) if metrics is not None else []
         )
+        # Цвет — каждого места и по его подложке: карточки одного ряда бывают
+        # разного цвета. Порог контраста — по кеглю, которым место набрано.
+        colors = [
+            _text_color(
+                container,
+                role,
+                is_dark,
+                _under(seat, background),
+                spec,
+                slot=seat,
+                size_pt=fits[number].size_pt if number < len(fits) else 0.0,
+            )
+            for number, (seat, _) in enumerate(seats)
+        ]
         color = colors[0]
         others = [taken_box for taken_box in taken if taken_box is not title_box]
         taken.extend(seat_box for seat_box, _ in placed)
@@ -1749,6 +1826,30 @@ def build_slide_ir(
                 size_pt=fit.size_pt if fit is not None else start,
                 color=colors[number],
             )
+            # Число и его подпись в одном месте показателя: шаблон пишет
+            # цветом показателя только число (синее «91%» `vk_tech`), подпись
+            # — цветом подписи или основного текста композиции.
+            styles = [style] * len(text)
+            seat_role = slot.role if slot is not None else role
+            if seat_role is SlotRole.KPI_VALUE and len(text) > 1:
+                label_role = (
+                    SlotRole.KPI_LABEL
+                    if any(s.role is SlotRole.KPI_LABEL for s in container.slots)
+                    else SlotRole.BODY
+                )
+                label = style.model_copy(
+                    update={
+                        "color": _text_color(
+                            container,
+                            label_role,
+                            is_dark,
+                            _under(seats[number][0], background),
+                            spec,
+                            size_pt=style.size_pt,
+                        )
+                    }
+                )
+                styles = [style] + [label] * (len(text) - 1)
             elements.append(
                 Element(
                     id=seat_id,
@@ -1759,8 +1860,8 @@ def build_slide_ir(
                     backdrop=_under(seats[number][0], None),
                     text=TextContent(
                         paragraphs=[
-                            Paragraph(text=line, style=style, bullet=len(text) > 1)
-                            for line in text
+                            Paragraph(text=line, style=line_style, bullet=len(text) > 1)
+                            for line, line_style in zip(text, styles, strict=True)
                         ],
                         # Переполнение записывается в само представление, а не
                         # только в находки вёрстки: аудит читает IR и обязан

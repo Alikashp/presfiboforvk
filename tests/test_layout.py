@@ -35,7 +35,7 @@ from deckwright.layout.strategy import (
 )
 from deckwright.layout.text_metrics import metrics_for_spec
 from deckwright.parse.opener import parse_template
-from deckwright.schemas import Box, Color, DeckPlan, SlotRole
+from deckwright.schemas import Box, Color, DeckPlan, SlotRole, required_contrast
 
 CONFIG = "configs/config.yaml"
 VARIANTS = ("airy", "balanced", "dense")
@@ -315,15 +315,18 @@ def test_text_is_readable_on_the_background_it_lands_on(specs, plan):
                     # цвет: на фиолетовой карточке синтетического тёмного
                     # шаблона у белого 4.35, у чёрного 4.4. Тогда требуется
                     # лучший достижимый контраст, а не невозможный.
-                    reachable = min(
-                        MIN_CONTRAST,
-                        max(
-                            Color(rgb=rgb).contrast_ratio(backdrop)
-                            for rgb in ("FFFFFF", "111111")
-                        ),
+                    best = max(
+                        Color(rgb=rgb).contrast_ratio(backdrop) for rgb in ("FFFFFF", "111111")
                     )
                     for paragraph in element.text.paragraphs:
-                        ratio = paragraph.style.color.contrast_ratio(backdrop)
+                        # Порог — по кеглю (крупному тексту WCAG хватает 3:1)
+                        # и 3:1 для пары, которой пишет сам шаблон.
+                        style = paragraph.style
+                        needed = required_contrast(style.size_pt, style.bold, MIN_CONTRAST)
+                        if spec.writes_on(style.color, backdrop):
+                            needed = min(needed, required_contrast(18.0, False, MIN_CONTRAST))
+                        reachable = min(needed, best)
+                        ratio = style.color.contrast_ratio(backdrop)
                         assert ratio >= reachable - 0.01, (
                             f"{name}/{variant}: слайд {slide.index}, {element.id} — "
                             f"контраст {ratio:.2f} при достижимом {reachable:.2f}"
@@ -868,3 +871,34 @@ def test_list_gets_a_place_per_item_when_the_template_has_one(specs, live_plan):
                     f"{name}/{variant}: слайд {slide.index} — список в одной рамке, "
                     "хотя есть композиция с местом под каждый пункт"
                 )
+
+
+def test_titles_are_written_in_the_colour_the_template_uses_for_titles(specs, plan):
+    """C6: цвет роли — тот, которым шаблон её пишет на большинстве слайдов.
+
+    `vk_education` пишет заголовки синим на 35 слайдах из 36 светлых, а
+    колода выходила с чёрными: синий 4.4:1 не проходил порог мелкого текста,
+    хотя заголовок крупный, и цвет брался у места донора, а не у роли.
+    """
+    from deckwright.schemas import required_contrast
+
+    cfg = load_config(CONFIG)
+    for name, spec in specs:
+        deck, _ = build_deck_ir(spec, plan, cfg.variant("balanced"))
+        for slide in deck.slides:
+            if slide.pattern_id in spec.bookend_ids or slide.background is None:
+                continue
+            title = next((e for e in slide.all_elements() if e.role is SlotRole.TITLE), None)
+            if title is None or title.text is None:
+                continue
+            ground = title.backdrop or slide.background
+            wanted = spec.role_color(SlotRole.TITLE, ground.luminance < 0.5)
+            style = title.text.paragraphs[0].style
+            if wanted is None or wanted.contrast_ratio(ground) < required_contrast(
+                style.size_pt, style.bold
+            ):
+                continue
+            assert style.color.rgb == wanted.rgb, (
+                f"{name}: заголовок слайда {slide.index} цветом {style.color.rgb}, "
+                f"шаблон пишет заголовки {wanted.rgb}"
+            )
