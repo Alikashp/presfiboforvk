@@ -171,6 +171,12 @@ CHECKS: tuple[Check, ...] = (
         "Слайд состоит из одной картинки",
     ),
     _det(
+        "integrity.donor_data_leftover",
+        IssueCategory.INTEGRITY,
+        Severity.ERROR,
+        "На слайде остались данные донора: рыбный график или чужое число",
+    ),
+    _det(
         "integrity.duplicate_slides",
         IssueCategory.INTEGRITY,
         Severity.WARNING,

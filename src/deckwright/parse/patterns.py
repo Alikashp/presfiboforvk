@@ -21,6 +21,7 @@
 
 from __future__ import annotations
 
+import re
 from collections import defaultdict
 from dataclasses import dataclass
 from itertools import pairwise
@@ -132,6 +133,19 @@ def _signature(element: etree._Element, box: Box) -> tuple:
     )
 
 
+# Показатель шаблона: число с процентом или множителем, либо заглушка из
+# «x»/«х». Голая цифра — не показатель: «1», «2», «3» в кружках holdout —
+# номера шагов. Разбирается текст шаблона, а не ответ модели.
+_FIGURE = re.compile(
+    r"^[~≈<>+\-−]?\s*(\d[\d\s.,]*\s*[%×x]|[xхXХ]{2,}\s*[%×x]?)$"
+)
+
+
+def is_figure_text(text: str) -> bool:
+    """Похож ли текст шаблона на показатель: «10%», «ххх%», «×4»."""
+    return bool(_FIGURE.match(text.strip())) if text.strip() else False
+
+
 def _role_from_geometry(
     shape: _Shape,
     shapes: list[_Shape],
@@ -157,6 +171,11 @@ def _role_from_geometry(
         return GRAPHIC_ROLES.get(uri, SlotRole.UNKNOWN)
     if not shape.text:
         return SlotRole.DECOR
+    # Число донора — место показателя, где бы оно ни стояло: «10%» в центре
+    # кольца на `vk_tech` внутри карточки становилось подписью, туда садился
+    # пункт списка, и кольцо с чужой долей оставалось на слайде.
+    if is_figure_text(shape.text):
+        return SlotRole.KPI_VALUE
 
     sized = sorted({s.size_pt for s in shapes if s.size_pt > 0}, reverse=True)
     rank = sized.index(shape.size_pt) if shape.size_pt in sized else len(sized)

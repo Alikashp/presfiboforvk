@@ -637,9 +637,9 @@ def test_title_and_closing_use_the_templates_own_slides(specs, plan):
         if spec.cover_pattern_id is None:
             continue
         deck, _ = build_deck_ir(spec, plan, cfg.variant("balanced"))
-        for slide, plan_slide in zip(deck.slides, plan.slides, strict=False):
-            if plan_slide.intent is SlideIntent.TITLE:
-                assert slide.pattern_id == spec.cover_pattern_id, name
-            if plan_slide.intent is SlideIntent.CLOSING:
-                wanted = spec.closing_pattern_id or spec.cover_pattern_id
-                assert slide.pattern_id == wanted, name
+        # Деление переполненного слайда сдвигает номера: сверяются края.
+        if plan.slides[0].intent is SlideIntent.TITLE:
+            assert deck.slides[0].pattern_id == spec.cover_pattern_id, name
+        if plan.slides[-1].intent is SlideIntent.CLOSING:
+            wanted = spec.closing_pattern_id or spec.cover_pattern_id
+            assert deck.slides[-1].pattern_id == wanted, name

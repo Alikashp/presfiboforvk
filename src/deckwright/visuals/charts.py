@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from pptx.chart.data import CategoryChartData
 from pptx.dml.color import RGBColor
-from pptx.enum.chart import XL_CHART_TYPE, XL_LEGEND_POSITION
+from pptx.enum.chart import XL_CHART_TYPE, XL_LABEL_POSITION, XL_LEGEND_POSITION
 from pptx.util import Emu, Pt
 
 from deckwright.schemas import Box, ChartContent, ChartKind, ChartSeries, Color
@@ -60,6 +60,13 @@ def series_from_pack(
     return categories, out
 
 
+def series_unit(series_ids: list[str], pack) -> str:
+    """Единица первого ряда: подписи значений без неё — числа без смысла."""
+    known = {item.id: item for item in getattr(pack, "series", [])}
+    first = next((known[sid] for sid in series_ids if sid in known), None)
+    return first.unit if first is not None else ""
+
+
 def add_chart(slide, box: Box, content: ChartContent):
     """Кладёт нативный график в рамку и красит его в цвета шаблона."""
     data = CategoryChartData()
@@ -98,6 +105,9 @@ def _paint(chart, content: ChartContent) -> None:
         chart.font.color.rgb = RGBColor.from_string(style.color.rgb)
 
     single_series = content.chart_kind in (ChartKind.PIE, ChartKind.DOUGHNUT)
+    if content.highlight and content.muted_color is not None and not single_series:
+        _emphasize(chart, content)
+        return
     for index, plot_series in enumerate(chart.plots[0].series):
         if single_series:
             for point_index, point in enumerate(plot_series.points):
@@ -108,3 +118,32 @@ def _paint(chart, content: ChartContent) -> None:
         color = content.series[index % len(content.series)].color
         plot_series.format.fill.solid()
         plot_series.format.fill.fore_color.rgb = RGBColor.from_string(color.rgb)
+
+
+def _emphasize(chart, content: ChartContent) -> None:
+    """Главные точки — цветом бренда, остальные — приглушённым; значения — на точках.
+
+    График несёт вывод слайда, а не просто числа: взгляд должен упасть на то,
+    о чём заголовок. Ось значений и сетка при подписанных точках — шум, их нет;
+    заголовок диаграммы тоже: вывод уже стоит в заголовке слайда.
+    """
+    accent = RGBColor.from_string(content.series[0].color.rgb)
+    muted = RGBColor.from_string(content.muted_color.rgb)
+    plot = chart.plots[0]
+    plot_series = plot.series[0]
+    for index, point in enumerate(plot_series.points):
+        point.format.fill.solid()
+        point.format.fill.fore_color.rgb = accent if index in content.highlight else muted
+    chart.has_title = False
+    if content.show_values:
+        plot.has_data_labels = True
+        labels = plot.data_labels
+        labels.number_format = f'0" {content.unit}"' if content.unit else "0"
+        labels.number_format_is_linked = False
+        labels.position = XL_LABEL_POSITION.OUTSIDE_END
+        if content.label_style is not None:
+            labels.font.size = Pt(content.label_style.size_pt)
+            labels.font.bold = True
+        value_axis = chart.value_axis
+        value_axis.visible = False
+        value_axis.has_major_gridlines = False

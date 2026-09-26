@@ -189,6 +189,10 @@ class Pattern(BaseModel):
     repeaters: list[Repeater] = Field(default_factory=list)
     content_area: Box
     is_dark: bool = False
+    # Картинки донора, на которых стоит его число («10%» в центре кольца):
+    # визуализация данных, которых у нас нет. Аудит проверяет, что они не
+    # доехали до колоды.
+    figure_pictures: list[Box] = Field(default_factory=list)
     # Как определён класс: правилами по структуре или моделью по рендеру.
     provenance: Provenance
 

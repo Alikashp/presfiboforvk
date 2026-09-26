@@ -91,6 +91,7 @@
 |---|---|---|---|
 | `integrity.package_broken` | error | битые связи или необъявленные части пакета | `none` |
 | `integrity.slide_is_single_image` | error | слайд состоит из одной картинки | `none` |
+| `integrity.donor_data_leftover` | error | в готовом `.pptx` график донора («Ряд 1», «Category 2») или его число («10%», «ххх%»), которого нет в нашем содержании: ложные данные | `none` |
 | `integrity.duplicate_slides` | warning | два слайда повторяют друг друга слово в слово | `none` |
 
 LibreOffice о битых ссылках молчит: файл конвертируется без единой жалобы,

@@ -139,9 +139,11 @@ def test_chart_colors_are_visible_on_the_slide_background(rendered):
     """Первый цвет палитры — самый частый по площади, на тёмном шаблоне это фон.
 
     Покрасить им столбики значит нарисовать чёрное по чёрному: данные верные,
-    видно ничего.
+    видно ничего. Порог — для нетекстовой графики (WCAG 1.4.11, 3:1), а не
+    для текста: по порогу текста отсекался фирменный синий на белом (4.2), и
+    столбики красились чёрным.
     """
-    from deckwright.layout.matcher import MIN_CONTRAST
+    from deckwright.layout.matcher import GRAPHIC_CONTRAST
 
     for name, result in rendered:
         for slide in result.deck.slides:
@@ -152,7 +154,7 @@ def test_chart_colors_are_visible_on_the_slide_background(rendered):
                     continue
                 for series in element.chart.series:
                     ratio = series.color.contrast_ratio(slide.background)
-                    assert ratio >= MIN_CONTRAST, (
+                    assert ratio >= GRAPHIC_CONTRAST, (
                         f"{name}: ряд {series.name!r} — контраст {ratio:.2f}"
                     )
 

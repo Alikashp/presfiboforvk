@@ -757,3 +757,83 @@ def test_text_without_a_place_on_the_cover_is_a_finding(tmp_path):
     built, issues = build_deck_ir(spec, plan, "balanced")
     assert [i.check_id for i in issues] == ["layout.text_without_place"]
     assert all(e.role.value == "title" for e in built.slides[0].elements if e.text)
+
+
+def test_donor_data_left_in_the_deck_is_a_finding(clean, tmp_path):
+    """Рыбный график и чужое число в собранном файле — находка.
+
+    `"integrity.donor_data_leftover"`: в IR этих фигур нет, они приезжают
+    клонированием донора, и видны только в самом `.pptx`.
+    """
+    from pptx import Presentation as Open
+    from pptx.chart.data import CategoryChartData
+    from pptx.enum.chart import XL_CHART_TYPE
+    from pptx.util import Emu
+
+    from deckwright.audit.deterministic.content import donor_data
+
+    assert donor_data(clean.pptx, clean.deck) == []
+
+    presentation = Open(str(clean.pptx))
+    slide = presentation.slides[1]
+    data = CategoryChartData()
+    data.categories = ["Категория 1", "Категория 2"]
+    data.add_series("Ряд 1", (1, 2))
+    inch = 914400
+    slide.shapes.add_chart(
+        XL_CHART_TYPE.COLUMN_CLUSTERED, Emu(inch), Emu(inch), Emu(3 * inch), Emu(2 * inch), data
+    )
+    number = slide.shapes.add_textbox(Emu(5 * inch), Emu(inch), Emu(inch), Emu(inch))
+    number.text_frame.text = "10%"
+    spoiled = tmp_path / "spoiled.pptx"
+    presentation.save(spoiled)
+
+    found = donor_data(spoiled, clean.deck)
+    assert {issue.check_id for issue in found} == {"integrity.donor_data_leftover"}
+    assert len(found) == 2 and all(issue.slide_index == 2 for issue in found)
+
+
+def test_donor_picture_with_its_figure_is_a_finding(clean, tmp_path):
+    """Кольцо «10%» без числа — всё ещё чужая доля: картинка донора с числом."""
+    from PIL import Image
+    from pptx import Presentation as Open
+    from pptx.util import Emu
+
+    from deckwright.audit.deterministic.content import donor_data
+    from deckwright.schemas import (
+        Box,
+        DeckIR,
+        Pattern,
+        PatternClass,
+        Provenance,
+        Slot,
+        SlotRole,
+        SourceKind,
+        TemplateSpec,
+    )
+
+    inch = 914400
+    ring = Box(x=inch, y=inch, w=2 * inch, h=2 * inch)
+    here = Provenance(kind=SourceKind.SLIDE, ref="test")
+    pattern = Pattern(
+        id="ring", pattern_class=PatternClass.GRID, donor_slide_index=1,
+        slots=[Slot(id="t", role=SlotRole.TITLE, box=Box(x=0, y=0, w=inch, h=inch),
+                    provenance=here)],
+        content_area=ring, figure_pictures=[ring], provenance=here,
+    )
+    spec = TemplateSpec.model_construct(patterns=[pattern])
+    deck = DeckIR.model_validate(clean.deck.model_dump())
+    deck.slides[1].pattern_id = "ring"
+
+    picture = tmp_path / "ring.png"
+    Image.new("RGB", (8, 8), "#0077FF").save(picture)
+    presentation = Open(str(clean.pptx))
+    presentation.slides[1].shapes.add_picture(
+        str(picture), Emu(ring.x), Emu(ring.y), Emu(ring.w), Emu(ring.h)
+    )
+    spoiled = tmp_path / "ring.pptx"
+    presentation.save(spoiled)
+
+    found = donor_data(spoiled, deck, spec)
+    assert [issue.slide_index for issue in found] == [2]
+    assert found[0].check_id == "integrity.donor_data_leftover"
