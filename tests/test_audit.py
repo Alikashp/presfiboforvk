@@ -837,3 +837,42 @@ def test_donor_picture_with_its_figure_is_a_finding(clean, tmp_path):
     found = donor_data(spoiled, deck, spec)
     assert [issue.slide_index for issue in found] == [2]
     assert found[0].check_id == "integrity.donor_data_leftover"
+
+
+def test_large_text_needs_three_to_one_and_the_templates_own_pair_is_accepted(clean):
+    """Крупному тексту WCAG требует 3:1; пара, которой пишет сам шаблон, — тоже.
+
+    Белый по фирменному синему `vk_education` — 4.4:1: мелкий текст не
+    проходит 4.5, но шаблон пишет им сам, и это решение бренда. Пара, которой
+    в шаблоне нет, при том же контрасте остаётся находкой.
+    """
+    from deckwright.schemas import Color, required_contrast
+
+    assert required_contrast(18.0) == pytest.approx(3.0)
+    assert required_contrast(14.0, bold=True) == pytest.approx(3.0)
+    assert required_contrast(12.0) == 4.5
+
+    deck = clean.deck.model_copy(deep=True)
+    slide = deck.slides[1]
+    slide.background = Color(rgb="0077FF")
+    element = next(e for e in slide.all_elements() if e.text is not None)
+    element.backdrop = None
+    _restyle(element, color=Color(rgb="FFFFFF"), size_pt=12.0)
+
+    class Writes:
+        def __init__(self, answer: bool):
+            self.answer = answer
+
+        def writes_on(self, text, backdrop) -> bool:
+            return self.answer
+
+    def flagged(spec) -> bool:
+        return any(
+            element.id in issue.element_ids
+            for issue in template_fidelity.contrast(slide, spec=spec)
+        )
+
+    assert flagged(Writes(False))
+    assert not flagged(Writes(True))
+    _restyle(element, color=Color(rgb="FFFFFF"), size_pt=24.0)
+    assert not flagged(Writes(False))

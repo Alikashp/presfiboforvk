@@ -16,7 +16,9 @@ from deckwright.schemas import (
     SlideIR,
     SlotRole,
     TemplateSpec,
+    required_contrast,
 )
+from deckwright.schemas.common import LARGE_TEXT_SHARE
 
 # Порог Приложения 1. Тем же числом меряет вёрстка, когда выбирает цвет текста.
 MIN_CONTRAST = 4.5
@@ -133,11 +135,16 @@ def colors(slide: SlideIR, spec: TemplateSpec) -> list[Issue]:
     return found
 
 
-def contrast(slide: SlideIR, min_ratio: float = MIN_CONTRAST) -> list[Issue]:
+def contrast(
+    slide: SlideIR, min_ratio: float = MIN_CONTRAST, spec: TemplateSpec | None = None
+) -> list[Issue]:
     """Контраст ниже порога — это нечитаемый слайд, а не стилистический выбор.
 
     Порог приходит из конфига (`audit.contrast_min_ratio`); умолчание — 4.5:1
-    по WCAG AA для основного текста.
+    по WCAG AA для основного текста. Крупному тексту (от 18 pt, от 14 pt
+    полужирным) WCAG требует 3:1 — две трети основного порога. Столько же —
+    паре «цвет по подложке», которой пишет сам шаблон: это решение бренда,
+    и вёрстка берёт его так же (`TemplateSpec.writes_on`).
     """
     found: list[Issue] = []
     for element in slide.all_elements():
@@ -148,13 +155,22 @@ def contrast(slide: SlideIR, min_ratio: float = MIN_CONTRAST) -> list[Issue]:
             continue
         for paragraph in element.text.paragraphs:
             ratio = paragraph.style.color.contrast_ratio(backdrop)
-            if ratio >= min_ratio:
+            needed = required_contrast(
+                paragraph.style.size_pt, paragraph.style.bold, min_ratio
+            )
+            if ratio >= needed:
+                continue
+            if (
+                spec is not None
+                and spec.writes_on(paragraph.style.color, backdrop)
+                and ratio >= min_ratio * LARGE_TEXT_SHARE
+            ):
                 continue
             found.append(
                 _issue(
                     "template.low_contrast",
                     slide.index,
-                    f"{element.id}: контраст {ratio:.2f} при пороге {min_ratio}",
+                    f"{element.id}: контраст {ratio:.2f} при пороге {needed:.2f}",
                     element_ids=[element.id],
                     bbox=element.box,
                 )
@@ -231,7 +247,7 @@ def run(
     for slide in deck.slides:
         found.extend(fonts_and_sizes(slide, spec))
         found.extend(colors(slide, spec))
-        found.extend(contrast(slide, min_contrast))
+        found.extend(contrast(slide, min_contrast, spec))
         found.extend(layout_reference(slide, spec))
         found.extend(recurring_elements(slide, spec))
     return found

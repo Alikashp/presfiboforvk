@@ -111,6 +111,24 @@ class Color(Frozen):
         return (a + 0.05) / (b + 0.05)
 
 
+# Крупный текст по WCAG 2.x: от 18 pt, или от 14 pt полужирным. Ему хватает
+# 3:1 там, где основному нужно 4.5:1 (критерий 1.4.3). Без этого синий
+# заголовок `vk_education` (0077FF на белом, 4.4:1) перекрашивался в чёрный,
+# хотя шаблон пишет им заголовки на каждом слайде.
+LARGE_TEXT_PT = 18.0
+LARGE_BOLD_TEXT_PT = 14.0
+LARGE_TEXT_SHARE = 3.0 / 4.5
+
+
+def is_large_text(size_pt: float, bold: bool = False) -> bool:
+    return size_pt >= LARGE_TEXT_PT or (bold and size_pt >= LARGE_BOLD_TEXT_PT)
+
+
+def required_contrast(size_pt: float, bold: bool = False, normal: float = 4.5) -> float:
+    """Порог контраста для текста этого кегля: `normal` или его 2/3 для крупного."""
+    return normal * LARGE_TEXT_SHARE if is_large_text(size_pt, bold) else normal
+
+
 class Align(StrEnum):
     LEFT = "left"
     CENTER = "center"

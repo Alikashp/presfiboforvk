@@ -82,6 +82,10 @@ class Slot(BaseModel):
     # свободной фигуры на слайде-примере.
     ph_idx: int | None = None
     optional: bool = False
+    # Цвет, которым донор пишет в этом месте, — для мест без стиля (элементы
+    # повторителя). Без него цвет брался у первого слота композиции со
+    # стилем, чаще всего у заголовка: чёрный текст на синих карточках.
+    text_color: Color | None = None
     # Цвет залитой фигуры донора, на которой лежит слот: карточка, панель,
     # сам залитый прямоугольник с текстом. Контраст текста проверяется по
     # нему, а не по фону слайда: на `vk_education` светлый слайд с чёрной
@@ -364,6 +368,11 @@ def readable_text_color(
     ).color
 
 
+# Сколько мест роли нужно, чтобы её цвет считался цветом роли, а не
+# случайностью одного слайда.
+_ROLE_COLOR_MIN = 3
+
+
 class TemplateSpec(BaseModel):
     """Полный разбор шаблона. Выход слоя parse, вход слоёв layout и audit."""
 
@@ -399,6 +408,73 @@ class TemplateSpec(BaseModel):
     @property
     def aspect_ratio(self) -> float:
         return self.slide_width_emu / self.slide_height_emu
+
+    def writes_on(self, text: Color, backdrop: Color) -> bool:
+        """Пишет ли шаблон сам этим цветом по этой подложке.
+
+        Пара, которую выбрал дизайнер шаблона, — решение бренда: белый по
+        фирменному синему `vk_education` (4.4:1) не заменяется чёрным ради
+        десятой доли в пороге 4.5. Проверяется по местам композиций: цвет
+        места на его подложке, а без подложки — на фоне его layout'а.
+        """
+        return (text.rgb, backdrop.rgb) in self._written_pairs()
+
+    def role_color(self, role: SlotRole, dark: bool) -> Color | None:
+        """Цвет, которым шаблон пишет эту роль на светлом или тёмном фоне.
+
+        Большинство мест композиций шаблона, а не одно место донора: донор
+        пишет серым описание под чёрным подзаголовком карточки, синим —
+        подзаголовок над белым текстом, и цвет одного места становился цветом
+        всего содержания. Роли без своих мест (список, таблица, подпись
+        спикера) и роли, которые шаблон почти не пишет, берут цвет
+        основного текста.
+        """
+        counts = self._role_counts()
+        for wanted in (role, SlotRole.BODY):
+            found = counts.get((wanted, dark))
+            if found and sum(number for number, _ in found.values()) >= _ROLE_COLOR_MIN:
+                return max(found.values(), key=lambda item: item[0])[1]
+        return None
+
+    def _role_counts(self) -> dict[tuple[SlotRole, bool], dict[str, tuple[int, Color]]]:
+        backgrounds = {layout.id: layout.background for layout in self.layouts}
+        counts: dict[tuple[SlotRole, bool], dict[str, tuple[int, Color]]] = {}
+
+        def add(role: SlotRole, color: Color | None, under: Color | None) -> None:
+            if color is None or under is None:
+                return
+            bucket = counts.setdefault((role, under.luminance < 0.5), {})
+            number, _ = bucket.get(color.rgb, (0, color))
+            bucket[color.rgb] = (number + 1, color)
+
+        for pattern in self.content_patterns:
+            ground = backgrounds.get(pattern.layout_id) if pattern.layout_id else None
+            for slot in pattern.slots:
+                color = slot.text_color or (slot.style.color if slot.style else None)
+                add(slot.role, color, slot.backdrop or ground)
+            for repeater in pattern.repeaters:
+                under = next((b for b in repeater.member_backdrops if b is not None), ground)
+                for slot in repeater.item_slots:
+                    add(slot.role, slot.text_color, under)
+        return counts
+
+    def _written_pairs(self) -> set[tuple[str, str]]:
+        backgrounds = {layout.id: layout.background for layout in self.layouts}
+        pairs: set[tuple[str, str]] = set()
+        for pattern in self.patterns:
+            ground = backgrounds.get(pattern.layout_id) if pattern.layout_id else None
+            for slot in pattern.slots:
+                color = slot.text_color or (slot.style.color if slot.style else None)
+                under = slot.backdrop or ground
+                if color is not None and under is not None:
+                    pairs.add((color.rgb, under.rgb))
+            for repeater in pattern.repeaters:
+                unders = [b for b in repeater.member_backdrops if b is not None] or [ground]
+                for slot in repeater.item_slots:
+                    for under in unders:
+                        if slot.text_color is not None and under is not None:
+                            pairs.add((slot.text_color.rgb, under.rgb))
+        return pairs
 
     def layout(self, layout_id: str) -> LayoutSpec:
         for layout in self.layouts:

@@ -523,3 +523,44 @@ def test_grown_subtitle_stops_at_the_decor_and_the_panel():
     assert _grown([title, text], slide_h, [logo])[1].box.bottom == logo.y
     assert _grown([title, text], slide_h, [panel])[1].box.bottom == panel.bottom
     assert _grown([title, text], slide_h, [])[1].box.h == 3 * text.box.h
+
+
+def _shape(paragraphs: str):
+    from lxml import etree
+
+    return etree.fromstring(
+        '<p:sp xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" '
+        'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">'
+        f"<p:txBody><a:bodyPr/>{paragraphs}</p:txBody></p:sp>"
+    )
+
+
+def _run(text: str, rgb: str | None = None, size: int | None = None) -> str:
+    fill = f'<a:solidFill><a:srgbClr val="{rgb}"/></a:solidFill>' if rgb else ""
+    sz = f' sz="{size}"' if size else ""
+    return f"<a:r><a:rPr{sz}>{fill}</a:rPr><a:t>{text}</a:t></a:r>"
+
+
+def test_text_colour_is_the_colour_of_the_body_not_of_the_accent():
+    """Цвет места — цвет основного текста фигуры, а не первого выделения.
+
+    Донор выделяет акцентом число или подзаголовок карточки; раньше цвет
+    первого run'а становился цветом всего места, и основной текст
+    `vk_tech` и `vk_workspace` выходил синим.
+    """
+    from deckwright.parse.opener import _text_color
+
+    accent = _shape(
+        "<a:p>" + _run("91%", "0077FF") + _run("пользователей довольны сервисом", "000000")
+        + "</a:p>"
+    )
+    assert _text_color(accent, {}, {}).rgb == "000000"
+
+    card = _shape(
+        "<a:p>" + _run("Заголовок", "0077FF", 2000) + "</a:p>"
+        + "<a:p>" + _run("Текст", "FFFFFF", 1400) + "</a:p>"
+    )
+    assert _text_color(card, {}, {}).rgb == "FFFFFF"
+
+    # Своего цвета нет — цвет наследуется, решает звено выше.
+    assert _text_color(_shape("<a:p>" + _run("Текст") + "</a:p>"), {}, {}) is None
