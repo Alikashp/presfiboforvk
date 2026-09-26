@@ -257,8 +257,10 @@ def _spare_cards(
         if seats is None:
             continue
         # Повторитель, по которому разложен список, и его элементы донора.
+        # И одиночное место в карточке: блок в одной карточке из четырёх —
+        # узкая колонка посреди пустого слайда (`vk_tech`, показатель).
         for repeater in pattern.repeaters:
-            if len(seats) > 1 and seats[0][0].id.startswith(f"{repeater.id}_"):
+            if seats[0][0].id.startswith(f"{repeater.id}_"):
                 spare += max(0, repeater.observed_count - len(seats))
         taken.extend(slot.box for slot, _ in seats)
     return spare
@@ -405,14 +407,9 @@ def _blocks_fit(
                 return False
             taken.append(slot.box)
             continue
-        ladder = ladders[slot.role]
-        declared = (
-            slot.style.size_pt
-            if slot.style is not None
-            else _undeclared(spec, slot.role, ladder)
+        fits, _ = _fit_block(
+            [(seat, seat.box, text) for seat, text in seats], spec, strategy, metrics, ladders, role
         )
-        start = strategy.start_size(ladder, declared)
-        fits = _fit_seats([(seat.box, text) for seat, text in seats], metrics, ladder, start)
         if not all(fit.fits for fit in fits):
             return False
         # Порог — ступень шкалы под типичным кеглем роли, одна для всех
@@ -420,10 +417,20 @@ def _blocks_fit(
         # ступень ниже), со сдвигом вверх — для воздушного. Строгая ступень
         # пустела, подбор уходил в «влезает хоть как-то», и три пункта на
         # `vk_tech` садились в карточку кеглем 8 pt, а то и в таймлайн 4 pt.
-        if typical is not None and min(f.size_pt for f in fits) < _step_below(
-            ladder, typical.get(role, 0.0)
-        ):
-            return False
+        # Порог — и роли блока, и роли места: показатель в рамке основного
+        # текста читается не мельче основного текста (13 pt при 18 на
+        # `vk_tech` проходили по мерке показателя). Блок, разделённый по
+        # местам разных ролей (число и подпись), меряется ролью каждого места.
+        split = len({seat.role for seat, _ in seats}) > 1
+        if typical is not None:
+            for (seat, _), fit in zip(seats, fits, strict=True):
+                wanted = (
+                    typical.get(seat.role, 0.0)
+                    if split
+                    else max(typical.get(role, 0.0), typical.get(seat.role, 0.0))
+                )
+                if fit.size_pt < _step_below(ladders[seat.role], wanted):
+                    return False
         taken.extend(seat.box for seat, _ in seats)
     return True
 
@@ -488,7 +495,7 @@ def pick_pattern(
     def suitable(candidates: list[Pattern]) -> list[Pattern]:
         return [pattern for pattern in candidates if not unsuitable(pattern)]
 
-    def best_of(candidates: list[Pattern]) -> Pattern:
+    def best_of(candidates: list[Pattern], strict_ids: set[str] | None = None) -> Pattern:
         """Порядок решений: влезает текст → ещё не было в колоде → вариант.
 
         «Влезает» стоит первым сознательно. Разнообразие композиций ценно,
@@ -508,7 +515,7 @@ def pick_pattern(
             for block in plan_slide.blocks
         )
 
-        def key(pattern: Pattern) -> tuple[bool, bool, bool, bool, int, int]:
+        def key(pattern: Pattern) -> tuple[bool, bool, bool, bool, int, bool, int]:
             # `avoid` — композиции, которые для этого слайда уже взяли другие
             # варианты. Варианты строятся независимо, и там, где влезающих
             # композиций мало, два из них брали одну и ту же: на `vk_tech`
@@ -525,6 +532,7 @@ def pick_pattern(
                 pattern.id in avoid,
                 pattern.id in used,
                 _spare_cards(pattern, spec, plan_slide, strategy),
+                strict_ids is not None and pattern.id not in strict_ids,
                 order.get(pattern.pattern_class, len(order)),
             )
 
@@ -564,19 +572,26 @@ def pick_pattern(
     # сигнатура, где список влезает только кеглем 8 pt, хуже мягкой, где он
     # читается. Внутри ступени сначала композиции, где список разложен по
     # местам, — пункт на место.
+    #
+    # Строгая и мягкая сигнатуры внутри одной ступени — один пул: иначе
+    # вариант брал лучшую из двух-трёх строгих, хотя мягких, так же
+    # читаемых и не взятых соседями, было десяток, и три варианта сходились
+    # на одной композиции. Строгая сигнатура остаётся предпочтением в ключе
+    # `best_of` — после разнообразия.
+    strict_ids = {pattern.id for pattern in matches}
+    pool = matches + [pattern for pattern in relaxed if pattern.id not in strict_ids]
     for tier in (typical, None):
         for spread in (True, False):
-            for pool in (matches, relaxed):
-                roomy = fitting(
-                    [
-                        pattern
-                        for pattern in suitable(pool)
-                        if not spread or _lists_spread(pattern, spec, plan_slide, strategy)
-                    ],
-                    (tier,),
-                )
-                if roomy:
-                    return best_of(roomy)
+            roomy = fitting(
+                [
+                    pattern
+                    for pattern in suitable(pool)
+                    if not spread or _lists_spread(pattern, spec, plan_slide, strategy)
+                ],
+                (tier,),
+            )
+            if roomy:
+                return best_of(roomy, strict_ids)
     if matches and fitting(matches):
         return best_of(matches)
     roomy = fitting(relaxed)
@@ -840,14 +855,235 @@ def _seat(
     сборке слайда: мерить одно, а собирать другое значит снова получить
     переполнение, которого подбор не предвидел.
     """
+    split = _split_heading(pattern, block, free, taken)
+    if split:
+        return split
     for wanted in (role, *_TEXT_FALLBACK.get(role, ())):
+        pool = list(free)
         spread = _spread(pattern, block, wanted, free, taken)
         if spread:
-            return spread
+            return [
+                (_absorb(pattern, seat, pool, free, taken, block), lines)
+                for seat, lines in spread
+            ]
         slot = _assign(free, wanted, taken, fallback=False)
         if slot is not None:
-            return [(slot, _block_lines(block))]
+            return [(_absorb(pattern, slot, pool, free, taken, block), _block_lines(block))]
     return None
+
+
+# Место подписи меньше этой доли места числа — бирка, а не подпись.
+_LABEL_MIN_SHARE = 0.2
+# Роли, которыми пишется подпись показателя, от точной к общей.
+_LABEL_ROLES = (
+    SlotRole.KPI_LABEL,
+    SlotRole.CAPTION,
+    SlotRole.BODY,
+    SlotRole.BULLETS,
+    SlotRole.SUBTITLE,
+)
+# Текстовые места карточки: их объединение — текстовая область карточки.
+_CARD_TEXT_ROLES = frozenset(
+    {
+        SlotRole.BODY,
+        SlotRole.BULLETS,
+        SlotRole.CAPTION,
+        SlotRole.SUBTITLE,
+        SlotRole.KPI_LABEL,
+        SlotRole.KPI_VALUE,
+    }
+)
+
+
+def _member_prefix(pattern: Pattern | None, slot_id: str) -> str | None:
+    """Префикс мест одного элемента повторителя (`rep_2_`), если место — из него."""
+    if pattern is None:
+        return None
+    for repeater in pattern.repeaters:
+        head = f"{repeater.id}_"
+        if slot_id.startswith(head):
+            return f"{head}{slot_id[len(head):].split('_', 1)[0]}_"
+    return None
+
+
+def _gap(a: Box, b: Box) -> int:
+    """Расстояние между рамками: 0, если касаются или пересекаются."""
+    dx = max(0, b.x - a.right, a.x - b.right)
+    dy = max(0, b.y - a.bottom, a.y - b.bottom)
+    return max(dx, dy)
+
+
+def _split_heading(
+    pattern: Pattern | None, block, free: list, taken: list[Box]
+) -> list[tuple[object, list[str]]] | None:
+    """Показатель: число — в место числа, подпись — в соседнее текстовое место.
+
+    Шаблон кладёт их раздельно: крупное число и подпись под ним кеглем
+    текста. Вместе в месте числа подпись обязана влезть кеглем числа — на
+    holdout 115 pt — и не влезает; в месте текста число пишется подписью.
+    Подпись берётся из того же элемента повторителя, иначе — самое
+    просторное место не дальше высоты большего из двух.
+    """
+    if block.kind is not BlockKind.KPI or not block.heading or not block.items:
+        return None
+
+    def clear(slot) -> bool:
+        return not any(_overlaps(slot.box, box) for box in taken)
+
+    values = [slot for slot in free if slot.role is SlotRole.KPI_VALUE and clear(slot)]
+    if not values:
+        return None
+    # Самое крупное место числа: у ряда показателей донора бывают и
+    # микроподписи с ролью числа (0.18″ на `vk_tech`).
+    value = max(values, key=lambda slot: slot.box.area)
+    member = _member_prefix(pattern, value.id)
+    labels = [
+        slot
+        for slot in free
+        if slot is not value
+        and slot.role in _LABEL_ROLES
+        and clear(slot)
+        and not _overlaps(slot.box, value.box)
+        and _gap(slot.box, value.box) <= max(slot.box.h, value.box.h)
+    ]
+    if member is not None:
+        labels = [slot for slot in labels if slot.id.startswith(member)] or labels
+    if not labels:
+        return None
+    # Самое просторное из соседних: описание показателя, а не бирка
+    # «Заголовок» 0.8×0.2″ рядом с числом.
+    label = max(labels, key=lambda slot: (slot.box.area, -_gap(slot.box, value.box)))
+    # Рядом только бирка — подпись в неё не влезет; число с подписью тогда
+    # пишутся вместе в месте числа, как раньше (`vk_tech`, 91% и бирка).
+    if label.box.area < value.box.area * _LABEL_MIN_SHARE:
+        return None
+    free.remove(value)
+    free.remove(label)
+    return [(value, [block.heading]), (label, list(block.items))]
+
+
+def _absorb(
+    pattern: Pattern | None, slot, pool: list, free: list, taken: list[Box], block=None
+):
+    """Место в карточке растёт на её текстовую область.
+
+    Донор делит карточку на подзаголовок и описание. Блок без подзаголовка,
+    усаженный в одно из них, либо садился ниже пустого места подзаголовка
+    (пункты `vk_tech` — в серое описание), либо писался в месте подзаголовка
+    (абзац `vk_workspace` balanced 4). Его место — вся текстовая область
+    карточки: объединение её текстовых мест, стоящих друг над другом.
+    """
+    member = _member_prefix(pattern, slot.id)
+    if member is None or slot.role not in _CARD_TEXT_ROLES:
+        return slot
+    below = _body_below_picture(pattern, slot, pool, taken, member)
+    if (
+        below is not None
+        and block is not None
+        and not block.heading
+        and block.kind is not BlockKind.KPI
+    ):
+        # Рамка заголовка во всю карточку, в середине — иконка, под ней
+        # место текста (`vk_workspace`). Абзац без заголовка начинается с
+        # места текста и идёт до низа карточки, а не пишется вверху, где
+        # шаблон ставит заголовок.
+        free[:] = [other for other in free if other.id != below.id]
+        return below.model_copy(
+            update={"box": below.box.model_copy(update={"h": slot.box.bottom - below.box.y})}
+        )
+    siblings = [
+        other
+        for other in pool
+        if other.id != slot.id
+        and other.id.startswith(member)
+        and other.role in _CARD_TEXT_ROLES
+        and _stacked(other.box, slot.box)
+        and not any(_overlaps(other.box, box) for box in taken)
+    ]
+    if not siblings:
+        return slot
+    left = min(box.x for box in [slot.box, *(o.box for o in siblings)])
+    top = min(box.y for box in [slot.box, *(o.box for o in siblings)])
+    right = max(box.right for box in [slot.box, *(o.box for o in siblings)])
+    bottom = max(box.bottom for box in [slot.box, *(o.box for o in siblings)])
+    ids = {other.id for other in siblings}
+    free[:] = [other for other in free if other.id not in ids]
+    return slot.model_copy(update={"box": Box(x=left, y=top, w=right - left, h=bottom - top)})
+
+
+def _body_below_picture(pattern: Pattern, slot, pool: list, taken: list[Box], member: str):
+    """Место текста карточки под картинкой внутри рамки `slot`; None — нет такого."""
+    pictures = [
+        other.box
+        for other in pool
+        if other.role in (SlotRole.IMAGE, SlotRole.ICON) and slot.box.contains(other.box)
+    ]
+    pictures += [
+        other.box
+        for other in pattern.slots
+        if other.role in (SlotRole.IMAGE, SlotRole.ICON) and slot.box.contains(other.box)
+    ]
+    candidates = [
+        other
+        for other in pool
+        if other.id != slot.id
+        and other.id.startswith(member)
+        and other.role in _CARD_TEXT_ROLES
+        and slot.box.contains(other.box)
+        and any(picture.bottom <= other.box.y for picture in pictures)
+        and any(picture.y >= slot.box.y + slot.box.h // 10 for picture in pictures)
+        and not any(_overlaps(other.box, box) for box in taken)
+    ]
+    return min(candidates, key=lambda other: other.box.y) if candidates else None
+
+
+def _stacked(a: Box, b: Box) -> bool:
+    """Рамки одной колонки: ширина в пределах четверти, левые края вровень.
+
+    Подзаголовок и описание карточки — одна колонка. Подпись в кружке над
+    карточкой (holdout, 0.8″ при 2.6″) и номер шага таймлайна над описанием
+    (`vk_workspace`) — нет: слитый с ними текст ложится под кружок и на
+    линию таймлайна.
+    """
+    wide = max(a.w, b.w)
+    return min(a.w, b.w) >= 0.75 * wide and abs(a.x - b.x) <= 0.25 * wide
+
+
+def _fit_block(
+    seats: list[tuple[object, Box, list[str]]],
+    spec: TemplateSpec,
+    strategy: Strategy,
+    metrics: FontMetrics,
+    ladders: dict[SlotRole, list[float]],
+    role: SlotRole,
+) -> tuple[list[FitResult], list[float]]:
+    """Кегль мест блока: один на места одной роли, у каждой роли — свой.
+
+    Карточки одного ряда пишутся одинаково. Число показателя и его подпись —
+    разные роли со своими шкалами: 115 pt числу и 20 pt подписи на holdout.
+    Возвращает подбор и стартовый кегль для каждого места.
+    """
+    fits: list[FitResult | None] = [None] * len(seats)
+    starts = [0.0] * len(seats)
+    groups: dict[SlotRole, list[int]] = {}
+    for number, (slot, _, _) in enumerate(seats):
+        groups.setdefault(slot.role if slot is not None else role, []).append(number)
+    for group_role, numbers in groups.items():
+        slot = seats[numbers[0]][0]
+        ladder = ladders[group_role]
+        declared = (
+            slot.style.size_pt
+            if slot is not None and slot.style is not None
+            else _undeclared(spec, group_role, ladder)
+        )
+        start = strategy.start_size(ladder, declared)
+        found = _fit_seats(
+            [(seats[n][1], seats[n][2]) for n in numbers], metrics, ladder, start
+        )
+        for n, fit in zip(numbers, found, strict=True):
+            fits[n] = fit
+            starts[n] = start
+    return fits, starts
 
 
 def _fit_seats(
@@ -1744,26 +1980,38 @@ def build_slide_ir(
             homeless += 1
         else:
             box = slot.box
-        block_ladder = ladders[slot.role if slot is not None else role]
-        declared = (
-            slot.style.size_pt
-            if slot is not None and slot.style is not None
-            else _undeclared(spec, slot.role if slot is not None else role, block_ladder)
-        )
-        start = strategy.start_size(block_ladder, declared)
         element_id = f"s{plan_slide.index}_b{position}"
         placed = [
             (seat.box if seat is not None else box, text) for seat, text in seats
         ]
-        fits = (
-            _fit_seats(placed, metrics, block_ladder, start) if metrics is not None else []
-        )
+        if metrics is not None:
+            fits, starts = _fit_block(
+                [(seat, seat_box, text) for (seat, _), (seat_box, text) in zip(
+                    seats, placed, strict=True
+                )],
+                spec,
+                strategy,
+                metrics,
+                ladders,
+                role,
+            )
+        else:
+            block_ladder = ladders[slot.role if slot is not None else role]
+            declared = (
+                slot.style.size_pt
+                if slot is not None and slot.style is not None
+                else _undeclared(spec, slot.role if slot is not None else role, block_ladder)
+            )
+            fits, starts = [], [strategy.start_size(block_ladder, declared)] * len(seats)
+        start = starts[0]
         # Цвет — каждого места и по его подложке: карточки одного ряда бывают
         # разного цвета. Порог контраста — по кеглю, которым место набрано.
         colors = [
             _text_color(
                 container,
-                role,
+                # Блок, разделённый по местам (число и подпись), пишется
+                # цветом роли каждого места.
+                seat.role if seat is not None and len(seats) > 1 else role,
                 is_dark,
                 _under(seat, background),
                 spec,
@@ -1823,14 +2071,15 @@ def build_slide_ir(
                 )
             style = TextStyle(
                 font_family=font_family,
-                size_pt=fit.size_pt if fit is not None else start,
+                size_pt=fit.size_pt if fit is not None else starts[number],
                 color=colors[number],
             )
             # Число и его подпись в одном месте показателя: шаблон пишет
             # цветом показателя только число (синее «91%» `vk_tech`), подпись
             # — цветом подписи или основного текста композиции.
             styles = [style] * len(text)
-            seat_role = slot.role if slot is not None else role
+            seat = seats[number][0]
+            seat_role = seat.role if seat is not None else role
             if seat_role is SlotRole.KPI_VALUE and len(text) > 1:
                 label_role = (
                     SlotRole.KPI_LABEL
@@ -1854,7 +2103,7 @@ def build_slide_ir(
                 Element(
                     id=seat_id,
                     kind=ElementKind.TEXT,
-                    role=slot.role if slot is not None else role,
+                    role=seat.role if seat is not None else role,
                     box=seat_box,
                     provenance=provenance,
                     backdrop=_under(seats[number][0], None),

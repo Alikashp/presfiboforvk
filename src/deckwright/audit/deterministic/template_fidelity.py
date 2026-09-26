@@ -142,9 +142,13 @@ def contrast(
 
     Порог приходит из конфига (`audit.contrast_min_ratio`); умолчание — 4.5:1
     по WCAG AA для основного текста. Крупному тексту (от 18 pt, от 14 pt
-    полужирным) WCAG требует 3:1 — две трети основного порога. Столько же —
-    паре «цвет по подложке», которой пишет сам шаблон: это решение бренда,
-    и вёрстка берёт его так же (`TemplateSpec.writes_on`).
+    полужирным) WCAG требует 3:1 — две трети основного порога.
+
+    Пара «цвет по подложке», которой пишет сам шаблон (белый по синему
+    `vk_education`, 4.4:1), — решение бренда: вёрстка её сохраняет
+    (`TemplateSpec.writes_on`). Молча такой случай не пропускается: он
+    показывается предупреждением `template.brand_pair_contrast` с числом.
+    Ниже 3:1 и пара шаблона — ошибка.
     """
     found: list[Issue] = []
     for element in slide.all_elements():
@@ -153,6 +157,7 @@ def contrast(
         backdrop = element.backdrop or slide.background
         if element.text is None or backdrop is None:
             continue
+        warned = False
         for paragraph in element.text.paragraphs:
             ratio = paragraph.style.color.contrast_ratio(backdrop)
             needed = required_contrast(
@@ -165,6 +170,19 @@ def contrast(
                 and spec.writes_on(paragraph.style.color, backdrop)
                 and ratio >= min_ratio * LARGE_TEXT_SHARE
             ):
+                if warned:
+                    continue
+                warned = True
+                found.append(
+                    _issue(
+                        "template.brand_pair_contrast",
+                        slide.index,
+                        f"{element.id}: пара из шаблона, контраст {ratio:.1f}:1 "
+                        f"при пороге {needed:.1f}:1",
+                        element_ids=[element.id],
+                        bbox=element.box,
+                    )
+                )
                 continue
             found.append(
                 _issue(

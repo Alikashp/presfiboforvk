@@ -61,7 +61,8 @@
 | `template.font_not_in_template` | error | гарнитура не из шаблона | `none` |
 | `template.size_not_in_scale` | error | кегль не из типографической шкалы | `none` |
 | `template.color_not_in_palette` | warning | цвет текста не из палитры | `none` |
-| `template.low_contrast` | error | контраст текста с фоном ниже 4.5:1; для крупного (от 18 pt, от 14 pt полужирным) и для пары «цвет по подложке», которой пишет сам шаблон, — ниже 3:1 | `none` |
+| `template.low_contrast` | error | контраст текста с фоном ниже 4.5:1; для крупного (от 18 pt, от 14 pt полужирным) — ниже 3:1 | `none` |
+| `template.brand_pair_contrast` | warning | контраст ниже порога, но пару «цвет по подложке» использует сам шаблон (белый по синему `vk_education`, 4.4:1): цвет сохраняется, случай показывается с числом; ниже 3:1 — ошибка `low_contrast` | `none` |
 | `template.unknown_layout` | error | слайд ссылается на несуществующий layout | `none` |
 | `template.recurring_element_moved` | warning | логотип или колонтитул сдвинут со своего места | `automatic` |
 
