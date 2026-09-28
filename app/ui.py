@@ -264,9 +264,23 @@ def _stage_times(state: runs.RunState) -> None:
     stages = state.stages()
     if not stages:
         return
+    calls = state.model_stages()
     columns = st.columns(len(stages))
     for column, (name, seconds) in zip(columns, stages.items(), strict=True):
-        column.metric(name, f"{seconds:.1f} с")
+        entry = calls.get(name)
+        help_text = None
+        if entry:
+            help_text = (
+                f"вызовов {entry['calls']}, по порядку: "
+                + ", ".join(f"{value} с" for value in entry["call_seconds"])
+            )
+        column.metric(name, f"{seconds:.1f} с", help=help_text)
+        if entry:
+            # Повторы — ответ не по схеме, ожидание — место в минутном лимите
+            # токенов: оба стоят секунд, и по времени этапа их не различить.
+            column.caption(
+                f"повторов {entry['retries']} · ожидание лимита {entry['waited_seconds']:.1f} с"
+            )
 
 
 def _pick_key(state: runs.RunState, variant: str, issue_key: str, number: int) -> str:

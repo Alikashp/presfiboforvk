@@ -702,6 +702,7 @@ def pick_pattern(
     title_ladder: list[float] | None = None,
     ladders: dict[SlotRole, list[float]] | None = None,
     avoid: set[str] | None = None,
+    previous: str | None = None,
 ) -> Pattern | None:
     """Композиция под сигнатуру слайда, или None, если такой нет.
 
@@ -712,6 +713,11 @@ def pick_pattern(
     одинаковых слайдов формально верна и практически бесполезна — шаблон
     даёт десятки композиций именно затем, чтобы презентация не выглядела
     одним слайдом, повторённым десять раз.
+
+    `previous` — композиция предыдущего слайда: соседние слайды в одной
+    композиции не бывают, пока есть любая другая. Правило «третий повтор
+    уступает более редкой» требовало, чтобы редкая держала крупное число
+    так же, — и dense питча Fibonacci четыре слайда подряд собрал в одной.
     """
     used = used or set()
     avoid = avoid or set()
@@ -881,57 +887,63 @@ def pick_pattern(
     has_series = any(
         block.kind in (BlockKind.SERIES, BlockKind.TABLE) for block in plan_slide.blocks
     )
-    for tier in (typical, readable, None):
-        for spread in (True, False):
-            roomy = fitting(
-                [
-                    pattern
-                    for pattern in suitable(pool)
-                    if not spread or _lists_spread(pattern, spec, plan_slide, strategy)
-                ],
-                (tier,),
-            )
-            if not roomy:
-                continue
-            best = best_of(roomy, strict_ids)
-            if repeats[best.id] >= _MAX_REPEATS:
-                # Список по карточкам — лучше списка в одной рамке, но не
-                # ценой колоды из одинаковых слайдов: на шаблоне, где без фото
-                # одна композиция с карточками, она брала восемь слайдов из
-                # четырнадцати. Третий раз подряд уступает той, что колода
-                # брала реже, если текст там читается тем же кеглем.
-                rarer = [
-                    pattern
-                    for pattern in suitable(pool)
-                    if repeats[pattern.id] < repeats[best.id]
-                    and not _photo_left_empty(pattern, spec, has_series)
-                    # Крупное число — не ценой разнообразия: третий слайд
-                    # с одним показателем берёт ту же композицию, а не
-                    # строку под заголовком.
-                    and (figure_small(best) or not figure_small(pattern))
-                ]
-                # Тем же кеглем — лучше; нет таких — та, где текст влезает
-                # хотя бы кеглем своего места. На синтетическом шаблоне с фото
-                # типичный кегль тела (24) взят из layout'ов мастера, а
-                # текстовые композиции набраны 16: по типичному проходили
-                # одни карточки, и они брали девять слайдов из четырнадцати.
-                fresh = fitting(rarer, (tier,)) or [
-                    pattern
-                    for pattern in fitting(rarer, (None,))
-                    if _at_declared_size(pattern, spec, plan_slide, strategy, metrics, ladders)
-                    # И не ценой списка в одной рамке, если у повторённой он
-                    # разложен по карточкам, — до четвёртого повтора: три
-                    # пункта шаблона экзаменов садились в одну рамку 11 pt
-                    # ради третьего слайда с карточками.
-                    and (
-                        not spread
-                        or repeats[best.id] > _MAX_REPEATS
-                        or _lists_spread(pattern, spec, plan_slide, strategy)
-                    )
-                ]
-                if fresh:
-                    return best_of(fresh, strict_ids)
-            return best
+    # Соседний повтор запрещён, пока где-то ещё текст влезает хоть как-то:
+    # сначала все ступени без композиции соседа, и только если нигде — с ней.
+    # Запасной выбор ниже её не исключает: там она бывает единственной, где у
+    # каждого блока своё место.
+    others = [pattern for pattern in pool if pattern.id != previous] if previous else []
+    for candidates in [others, pool] if others else [pool]:
+        for tier in (typical, readable, None):
+            for spread in (True, False):
+                roomy = fitting(
+                    [
+                        pattern
+                        for pattern in suitable(candidates)
+                        if not spread or _lists_spread(pattern, spec, plan_slide, strategy)
+                    ],
+                    (tier,),
+                )
+                if not roomy:
+                    continue
+                best = best_of(roomy, strict_ids)
+                if repeats[best.id] >= _MAX_REPEATS:
+                    # Список по карточкам — лучше списка в одной рамке, но не
+                    # ценой колоды из одинаковых слайдов: на шаблоне, где без фото
+                    # одна композиция с карточками, она брала восемь слайдов из
+                    # четырнадцати. Третий раз подряд уступает той, что колода
+                    # брала реже, если текст там читается тем же кеглем.
+                    rarer = [
+                        pattern
+                        for pattern in suitable(candidates)
+                        if repeats[pattern.id] < repeats[best.id]
+                        and not _photo_left_empty(pattern, spec, has_series)
+                        # Крупное число — не ценой разнообразия: третий слайд
+                        # с одним показателем берёт ту же композицию, а не
+                        # строку под заголовком.
+                        and (figure_small(best) or not figure_small(pattern))
+                    ]
+                    # Тем же кеглем — лучше; нет таких — та, где текст влезает
+                    # хотя бы кеглем своего места. На синтетическом шаблоне с фото
+                    # типичный кегль тела (24) взят из layout'ов мастера, а
+                    # текстовые композиции набраны 16: по типичному проходили
+                    # одни карточки, и они брали девять слайдов из четырнадцати.
+                    fresh = fitting(rarer, (tier,)) or [
+                        pattern
+                        for pattern in fitting(rarer, (None,))
+                        if _at_declared_size(pattern, spec, plan_slide, strategy, metrics, ladders)
+                        # И не ценой списка в одной рамке, если у повторённой он
+                        # разложен по карточкам, — до четвёртого повтора: три
+                        # пункта шаблона экзаменов садились в одну рамку 11 pt
+                        # ради третьего слайда с карточками.
+                        and (
+                            not spread
+                            or repeats[best.id] > _MAX_REPEATS
+                            or _lists_spread(pattern, spec, plan_slide, strategy)
+                        )
+                    ]
+                    if fresh:
+                        return best_of(fresh, strict_ids)
+                return best
     if matches and fitting(matches):
         return best_of(matches)
     roomy = fitting(relaxed)
@@ -1373,6 +1385,79 @@ def _seat(
     taken: list[Box],
     reserve: int = 0,
 ) -> list[tuple[object, list[str]]] | None:
+    """Места блока — и показатель, севший в текстовое место, делит его.
+
+    Шаблон без композиции под три крупных числа (`vk_tech`): три показателя
+    питча Fibonacci садились в ряд карточек одной строкой «840 руб / LTV:
+    840 руб.» кеглем текста. Число показателя пишется кеглем числа: место
+    делится — сверху число, снизу подпись, как у места числа без подписи.
+    """
+    seats = _seat_any(pattern, block, role, free, taken, reserve)
+    if (
+        seats is None
+        or len(seats) != 1
+        or block.kind is not BlockKind.KPI
+        or not block.heading
+        or not block.items
+    ):
+        return seats
+    slot, _ = seats[0]
+    if slot.role not in _CARD_TEXT_ROLES or slot.box.h < _MIN_CARD_SPLIT_HEIGHT:
+        return seats
+    top = int(slot.box.h * _FIGURE_SHARE)
+    # Число — вдвое крупнее текста карточки: типичный кегль места числа у
+    # `vk_tech` — 14 pt (по биркам), и число выходило мельче своей подписи.
+    # Не влезет — фиттер опустит по шкале.
+    # Число — по шкале текста, но с её верха и жирным: у шкалы места числа
+    # свой низ (115 pt на `zelenie_investicii`), и в карточке его не ужать.
+    figure = (
+        slot.style.model_copy(update={"size_pt": slot.style.size_pt * 2, "bold": True})
+        if slot.style is not None
+        else None
+    )
+    return [
+        (
+            slot.model_copy(
+                update={
+                    "id": f"{slot.id}{_FIGURE_SUFFIX}",
+                    "style": figure,
+                    "box": slot.box.model_copy(update={"h": top}),
+                }
+            ),
+            [block.heading],
+        ),
+        (
+            slot.model_copy(
+                update={
+                    "box": slot.box.model_copy(
+                        update={"y": slot.box.y + top, "h": slot.box.h - top}
+                    )
+                }
+            ),
+            list(block.items),
+        ),
+    ]
+
+
+def _is_card_figure(slot) -> bool:
+    """Верх карточки, отданный числу показателя (`_seat`)."""
+    return slot is not None and str(getattr(slot, "id", "")).endswith(_FIGURE_SUFFIX)
+
+
+_FIGURE_SUFFIX = "_value"
+# Высота текстового места, которое показатель ещё делит на число и подпись:
+# карточка `vk_tech` — 0.87″; строка «Бюджет» в полдюйма — уже нет.
+_MIN_CARD_SPLIT_HEIGHT = 640_080  # 0.7″
+
+
+def _seat_any(
+    pattern: Pattern | None,
+    block,
+    role: SlotRole,
+    free: list,
+    taken: list[Box],
+    reserve: int = 0,
+) -> list[tuple[object, list[str]]] | None:
     """Места блока и строки для каждого; None — места не нашлось.
 
     Роли перебираются в порядке предпочтения, и на каждой сначала —
@@ -1804,12 +1889,15 @@ def _fit_block(
     """
     fits: list[FitResult | None] = [None] * len(seats)
     starts = [0.0] * len(seats)
-    groups: dict[SlotRole, list[int]] = {}
+    groups: dict[tuple[SlotRole, bool], list[int]] = {}
     for number, (slot, _, _) in enumerate(seats):
-        groups.setdefault(slot.role if slot is not None else role, []).append(number)
-    for group_role, numbers in groups.items():
+        key = (slot.role if slot is not None else role, _is_card_figure(slot))
+        groups.setdefault(key, []).append(number)
+    for (group_role, figure), numbers in groups.items():
         slot = seats[numbers[0]][0]
-        ladder = ladders[group_role]
+        # Число показателя в карточке (`_seat`) — своя группа по шкале
+        # заголовка: одной группой с подписью оно писалось её кеглем.
+        ladder = ladders[SlotRole.TITLE if figure else group_role]
         declared = (
             slot.style.size_pt
             if slot is not None and slot.style is not None
@@ -1819,9 +1907,35 @@ def _fit_block(
         found = _fit_seats(
             [(seats[n][1], seats[n][2]) for n in numbers], metrics, ladder, start
         )
+        if figure and not all(fit.fits for fit in found):
+            # Низ шкалы заголовка не влез в верх карточки (24 pt на
+            # `zelenie_investicii`) — число идёт по шкале своего места.
+            ladder = ladders[group_role]
+            start = strategy.start_size(ladder, declared)
+            found = _fit_seats(
+                [(seats[n][1], seats[n][2]) for n in numbers], metrics, ladder, start
+            )
         for n, fit in zip(numbers, found, strict=True):
             fits[n] = fit
             starts[n] = start
+    # Число карточки упёрлось в шкалу своего места и сравнялось с подписью —
+    # подпись на ступень ниже: показатель читается числом, а не строкой.
+    figures = [fits[n] for (key, numbers) in groups.items() if key[1] for n in numbers]
+    if figures:
+        top = min(fit.size_pt for fit in figures)
+        for (group_role, figure), numbers in groups.items():
+            if figure or all(fits[n].size_pt < top for n in numbers):
+                continue
+            ladder = ladders[group_role]
+            below = [step for step in ladder if step < top]
+            if not below:
+                continue
+            found = _fit_seats(
+                [(seats[n][1], seats[n][2]) for n in numbers], metrics, ladder, max(below)
+            )
+            for n, fit in zip(numbers, found, strict=True):
+                fits[n] = fit
+                starts[n] = max(below)
     return fits, starts
 
 
@@ -2711,14 +2825,17 @@ def build_slide_ir(
     pack=None,
     avoid: set[str] | None = None,
     sections: list[str] | None = None,
+    previous: str | None = None,
 ) -> tuple[SlideIR, list[Issue]]:
     """Один слайд: композиция шаблона, заполненная содержанием плана.
 
     `sections` — разделы колоды (пункты повестки): ими подписывается маршрут
-    или ряд элементов обложки, если он у неё есть.
+    или ряд элементов обложки, если он у неё есть. `previous` — композиция
+    предыдущего слайда (`pick_pattern`).
     """
     pattern = _bookend(spec, plan_slide) or pick_pattern(
-        spec, plan_slide, strategy, used, metrics, ladders[SlotRole.TITLE], ladders, avoid
+        spec, plan_slide, strategy, used, metrics, ladders[SlotRole.TITLE], ladders, avoid,
+        previous,
     )
     layout = pick_layout(spec, plan_slide)
     container = pattern if pattern is not None else layout
@@ -3173,7 +3290,7 @@ def build_deck_ir(
         avoid = {chosen[plan_slide.index] for chosen in others if plan_slide.index in chosen}
         built, found = _slides_for(
             spec, plan_slide, strategy, metrics, ladders, font_family, used, pack, avoid,
-            sections,
+            sections, slides[-1].pattern_id if slides else None,
         )
         if built and built[0].pattern_id:
             mine[plan_slide.index] = built[0].pattern_id
@@ -3598,6 +3715,7 @@ def _slides_for(
     pack=None,
     avoid: set[str] | None = None,
     sections: list[str] | None = None,
+    previous: str | None = None,
 ) -> tuple[list[SlideIR], list[Issue]]:
     """Слайд, а если он переполнен и деление помогает — два.
 
@@ -3613,7 +3731,8 @@ def _slides_for(
     шесть наложений на колоду.
     """
     slide, issues = build_slide_ir(
-        spec, plan_slide, strategy, metrics, ladders, font_family, used, pack, avoid, sections
+        spec, plan_slide, strategy, metrics, ladders, font_family, used, pack, avoid, sections,
+        previous,
     )
 
     # Переполнение заголовка делением не лечится: у обеих половин заголовок

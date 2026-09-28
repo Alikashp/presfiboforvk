@@ -221,3 +221,45 @@ def test_variants_differ_on_most_content_slides(lossy):
         if len({deck.slides[index].pattern_id for deck in decks}) == 1
     ]
     assert len(same) * 3 <= len(content), same
+
+
+# ── Приёмка сайта, 28.09: KPI, соседние повторы ─────────────────────────────
+
+
+@pytest.fixture(scope="module")
+def live(tmp_path_factory):
+    return _lay_out(PITCH / "recorded", tmp_path_factory.mktemp("live"))
+
+
+@pytest.mark.parametrize("variant", VARIANTS)
+def test_neighbouring_slides_are_not_in_one_composition(live, variant):
+    """dense на сайте: «Объём рынка», «Метрики», «Юнит-экономика», «Средства» — одна композиция."""
+    deck, spec = live[variant].deck, live[variant].spec
+    pairs = [
+        (a.index, b.index)
+        for a, b in zip(deck.slides, deck.slides[1:], strict=False)
+        if a.pattern_id == b.pattern_id and a.pattern_id not in spec.bookend_ids
+    ]
+    assert not pairs, pairs
+
+
+@pytest.mark.parametrize("variant", VARIANTS)
+def test_kpi_number_is_bigger_than_its_caption(live, variant):
+    """Число показателя — крупно, подпись — ниже и мельче, а не одной строкой."""
+    checked = 0
+    for slide in live[variant].deck.slides:
+        texts = [e for e in slide.all_elements() if e.text is not None]
+        for element in texts:
+            if not element.id.endswith("_0"):
+                continue
+            caption = next((e for e in texts if e.id == element.id[:-2] + "_1"), None)
+            if caption is None:
+                continue
+            number = element.text.paragraphs[0]
+            if not any(char.isdigit() for char in number.text):
+                continue
+            checked += 1
+            assert number.style.size_pt > caption.text.paragraphs[0].style.size_pt, (
+                slide.index, number.text
+            )
+    assert checked >= 3

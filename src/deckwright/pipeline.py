@@ -44,6 +44,7 @@ from deckwright.llm.base import StructuredClient
 from deckwright.parse.opener import parse_template
 from deckwright.plan.budget import LengthBudget, compute_budget
 from deckwright.plan.planner import Prompt, build_plan, slide_count_text
+from deckwright.plan.shaping import shape_data
 from deckwright.render.html import export_html
 from deckwright.render.package_check import check_package
 from deckwright.render.pdf import pptx_to_pdf
@@ -129,6 +130,9 @@ class PreparedPlan:
     # Какие композиции варианты уже взяли: {вариант: {слайд плана: композиция}}.
     # По нему следующий вариант избегает чужих композиций (A12).
     layouts: dict[str, dict[int, str]] = field(default_factory=dict)
+    # Пакет после `shape_data`: ряды, собранные из фактов под кольцо и
+    # столбцы. Вёрстка и аудит обязаны видеть тот же пакет, что и план.
+    pack: ContentPack | None = None
 
 
 @dataclass
@@ -208,7 +212,8 @@ def _agent_versions(
 
 def _step_params(model_cfg, steps: tuple[str, ...]) -> dict[str, dict[str, object]]:
     """Параметры шагов в том виде, в каком они ушли в запрос."""
-    return {name: model_cfg.step(name).model_dump() for name in steps}
+    # Ключ провайдера — секрет: в манифест прогона он не попадает.
+    return {name: model_cfg.step(name).model_dump(exclude={"api_key"}) for name in steps}
 
 
 @contextmanager
@@ -617,6 +622,44 @@ def stage_times(ingest_seconds: float, manifests: list[RunManifest]) -> dict[str
     }
 
 
+# Этап прогона, к которому относится шаг модели.
+_STEP_STAGE = {
+    "ingest_content": STAGE_INGEST,
+    "plan_deck": STAGE_PLAN,
+    "audit_slide": STAGE_AUDIT,
+    "audit_deck": STAGE_AUDIT,
+    "shorten_text": STAGE_AUDIT,
+    "rewrite_slide": STAGE_AUDIT,
+}
+
+
+def model_stages(*clients: object) -> dict[str, dict[str, object]]:
+    """Вызовы модели по этапам: сколько, сколько повторов, сколько ожидания лимита.
+
+    Прогон на сайте (run-20260928-121651-876): план 132 с, аудит 108 с. По
+    одному времени этапа не сказать, повторы это (ответ не по схеме),
+    ожидание места в минутном лимите токенов или медленный ответ провайдера:
+    `seconds` — все вызовы этапа с ожиданием, `waited_seconds` — из них
+    ожидание ограничителя, `call_seconds` — каждый вызов по порядку.
+    Параллельные вызовы аудита складываются, поэтому их сумма бывает больше
+    времени этапа по часам.
+    """
+    stages: dict[str, dict[str, object]] = {}
+    for client in clients:
+        for step, record in sorted(getattr(client, "by_step", {}).items()):
+            entry = stages.setdefault(
+                _STEP_STAGE.get(step, step),
+                {"calls": 0, "retries": 0, "seconds": 0.0, "waited_seconds": 0.0,
+                 "call_seconds": []},
+            )
+            entry["calls"] += record.calls
+            entry["retries"] += record.retries
+            entry["seconds"] = round(entry["seconds"] + record.seconds, 1)
+            entry["waited_seconds"] = round(entry["waited_seconds"] + record.waited_seconds, 1)
+            entry["call_seconds"] = [*entry["call_seconds"], *record.call_seconds]
+    return stages
+
+
 @dataclass
 class LaidOut:
     """Вариант после раскладки: всё, что нужно сборке, рендеру и аудиту.
@@ -762,6 +805,7 @@ def lay_out_variant(
     with _timed(manifest, "plan", on_stage):
         if prepared is not None:
             plan, prompt, budget = prepared.plan, prepared.prompt, prepared.budget
+            pack = prepared.pack or pack
         else:
             plan, prompt, budget = build_plan(
                 pack,
@@ -774,7 +818,8 @@ def lay_out_variant(
                 block_limits=plan_limits(spec, cfg),
                 min_slides=cfg.deck.slide_count or cfg.deck.min_slides,
             )
-            prepared = PreparedPlan(plan=plan, prompt=prompt, budget=budget)
+            plan, pack = shape_data(plan, pack)
+            prepared = PreparedPlan(plan=plan, prompt=prompt, budget=budget, pack=pack)
     if budget is not None:
         manifest.warnings.append(
             f"бюджет длины ({budget.measured_with}): заголовок {budget.title_chars} симв, "

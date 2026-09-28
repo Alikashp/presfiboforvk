@@ -36,6 +36,7 @@ from deckwright.pipeline import (
     apply_selection,
     complete_variant,
     lay_out_variant,
+    model_stages,
     stage_times,
 )
 from deckwright.schemas import ContentPack, DeckPurpose, FixKind
@@ -74,6 +75,12 @@ class RunState:
     # Манифесты разложенных вариантов: в них разбор шаблона и план — видны,
     # пока идут сборка и аудит.
     laid_manifests: list = field(default_factory=list)
+    # Клиенты модели прогона: по их счётчикам — повторы и ожидание лимита.
+    clients: list = field(default_factory=list)
+
+    def model_stages(self) -> dict[str, dict[str, object]]:
+        """Вызовы модели по этапам (`pipeline.model_stages`), пока прогон идёт и после."""
+        return model_stages(*self.clients)
 
     @property
     def elapsed(self) -> float:
@@ -140,6 +147,7 @@ def start(
         template_name=Path(template_path).name,
         started_at=datetime.now(UTC),
         variants={name: VariantState(name=name) for name in variants},
+        clients=[item for item in (client, vlm_client) if item is not None],
     )
     with _LOCK:
         _RUNS[run_id] = state

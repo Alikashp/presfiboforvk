@@ -18,7 +18,13 @@ from deckwright.content.readers import UnsupportedInput
 from deckwright.environment import run_checks
 from deckwright.llm.base import StructuredClient
 from deckwright.llm.fake import RecordedClient
-from deckwright.pipeline import complete_variant, lay_out_variant, run_variant, stage_times
+from deckwright.pipeline import (
+    complete_variant,
+    lay_out_variant,
+    model_stages,
+    run_variant,
+    stage_times,
+)
 from deckwright.schemas import ContentPack, DeckPurpose, RunSummary
 
 DEFAULT_CONFIG = Path("configs/config.yaml")
@@ -246,12 +252,19 @@ def _cmd_run(args: argparse.Namespace) -> int:
         total_seconds=round(total, 3),
         budget_seconds=cfg.run.time_budget_seconds,
         stages=stage_times(pack_seconds, [result.manifest for result in results]),
+        model_stages=model_stages(client, vlm_client),
     )
     output_root.mkdir(parents=True, exist_ok=True)
     (output_root / "run-summary.json").write_text(
         summary.model_dump_json(indent=2), encoding="utf-8"
     )
     print("[этапы] " + ", ".join(f"{name} {seconds}с" for name, seconds in summary.stages.items()))
+    for name, entry in summary.model_stages.items():
+        print(
+            f"[модель] {name}: вызовов {entry['calls']}, повторов {entry['retries']}, "
+            f"в вызовах {entry['seconds']}с, из них ожидание лимита "
+            f"{entry['waited_seconds']}с; вызовы {entry['call_seconds']}"
+        )
     print(
         f"[прогон] разбор входа {summary.parse_seconds}с "
         f"(из них материалы {summary.ingest_seconds}с); "

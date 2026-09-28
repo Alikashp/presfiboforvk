@@ -57,8 +57,8 @@ variants:
 # прогона. Параметры шагов живут только здесь, в секциях llm и vlm их нет:
 # endpoint задаёт адрес, ключ, модель по умолчанию, цены и лимиты аккаунта.
 agents:
-  - agents/ingest_content.v1.yaml
-  - agents/plan_deck.v1.yaml
+  - agents/ingest_content.v2.yaml
+  - agents/plan_deck.v2.yaml
   - agents/audit_slide.v1.yaml
   - agents/audit_deck.v1.yaml
   - agents/shorten_text.v1.yaml

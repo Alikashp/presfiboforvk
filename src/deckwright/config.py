@@ -47,6 +47,12 @@ class StepParams(BaseModel):
     model: str | None = None
     timeout_seconds: int | None = Field(default=None, gt=0)
     max_retries: int | None = Field(default=None, ge=0)
+    # Провайдер шага — из агента: адрес OpenAI-совместимого API и ключ. Не
+    # заданы — провайдер endpoint'а (`llm` / `vlm` в config.yaml). Так план
+    # идёт в DeepInfra, а аудит по картинкам — в SiliconFlow правкой одного
+    # файла агента, без кода.
+    base_url: str | None = None
+    api_key: str | None = None
 
 
 class AgentLimits(BaseModel):
@@ -74,6 +80,10 @@ class Agent(BaseModel):
     description: str = ""
     endpoint: str = Field(pattern=r"^(llm|vlm)$")
     model: str = ""
+    # Свой провайдер агента: адрес API и ключ (`${DEEPINFRA_API_KEY}` из
+    # .env). Пусто — провайдер endpoint'а.
+    base_url: str = ""
+    api_key: str = Field(default="", repr=False)
     prompt: str
     params: dict[str, Any] = Field(default_factory=dict)
     limits: AgentLimits = Field(default_factory=AgentLimits)
@@ -86,6 +96,8 @@ class Agent(BaseModel):
             timeout_seconds=self.limits.timeout_seconds,
             max_retries=self.limits.max_retries,
             hedge_after_seconds=self.limits.hedge_after_seconds,
+            base_url=self.base_url or None,
+            api_key=self.api_key or None,
         )
 
 

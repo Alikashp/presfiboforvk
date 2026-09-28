@@ -59,6 +59,10 @@ on:
         description: "Входы (бриф, docx, pdf, чужой JSON, продажи, наблюдаемость) на всех шаблонах: true — все, `вход:шаблон[,вход:шаблон…]` — выбранные пары (brief:vk_tech,docx:zelenie_investicii)"
         required: false
         default: "false"
+      new_repeats:
+        description: "Сколько раз подряд прогнать каждую пару new_inputs (живой план каждый раз другой)"
+        required: false
+        default: "1"
       audit_dpi:
         description: "Картиночный аудит записанных колод «продажи» при 96/72/60 dpi: токены и находки"
         required: false
@@ -252,12 +256,16 @@ jobs:
           VLM_API_KEY: ${{ secrets.LLM_API_KEY }}
           VLM_MODEL: ${{ inputs.model }}
           ONLY: ${{ inputs.new_inputs }}
+          REPEATS: ${{ inputs.new_repeats }}
         run: |
           if [ -z "$LLM_API_KEY" ]; then
             echo "::error::Секрет LLM_API_KEY не задан."
             exit 1
           fi
           python tests/fixtures/make_inputs.py probe-inputs
+          for RUN in $(seq 1 "${REPEATS:-1}"); do
+          SUFFIX=""
+          if [ "${REPEATS:-1}" != "1" ]; then SUFFIX="-r$RUN"; fi
           for INPUT in brief docx pdf json sales observability pitch; do
             for TEMPLATE in data/templates/vk_tech.pptx data/templates/vk_workspace.pptx \
                             data/templates/vk_education.pptx data/holdout/zelenie_investicii.pptx \
@@ -267,7 +275,7 @@ jobs:
               if [ "$ONLY" != "true" ] && [[ ",$ONLY," != *",$INPUT:$NAME,"* ]]; then
                 continue
               fi
-              OUT="probe-out/new/$INPUT/$NAME"
+              OUT="probe-out/new/$INPUT$SUFFIX/$NAME"
               mkdir -p "$OUT"
               python - "$INPUT" > "$OUT/args" <<'PY'
           import json, shlex, sys
@@ -279,14 +287,14 @@ jobs:
               args += ["--input", f"probe-inputs/{name}"]
           print(shlex.join(args))
           PY
-              echo "===== ПРОГОН $INPUT × $NAME ====="
+              echo "===== ПРОГОН $INPUT$SUFFIX × $NAME ====="
               eval deckwright run --template "$TEMPLATE" $(cat "$OUT/args") \
                 --fix auto --output "$OUT" \
                 --save-pack "$OUT/pack.json" --save-plan "$OUT/plan.json" \
                 > "$OUT/run.log" 2>&1 || echo "прогон упал: код $?"
               # Поэтапное время вариантов и вызовы модели: без них не видно,
               # куда уходит бюджет (живой dense 145 с на любом шаблоне).
-              grep -E '^\[(вход|прогон|шаг|этапы)\]|^\[(dense|balanced|airy)\] (parse|разбор|модель|итерация)|ВНЕ|Traceback|Error' "$OUT/run.log" || true
+              grep -E '^\[(вход|прогон|шаг|этапы|модель)\]|^\[(dense|balanced|airy)\] (parse|разбор|модель|итерация)|ВНЕ|Traceback|Error' "$OUT/run.log" || true
               python - "$OUT" <<'PY'
           import collections, glob, json, pathlib, sys
           out = pathlib.Path(sys.argv[1])
@@ -331,6 +339,7 @@ jobs:
               print(f"----- КОНЕЦ {name} -----")
           PY
             done
+          done
           done
 
       # Сравнение разрешений картинок аудита на уже собранных колодах: колоды
