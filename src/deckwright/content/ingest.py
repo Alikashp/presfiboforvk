@@ -51,6 +51,21 @@ MAX_FACTS = 30
 SMALL_COUNT = 10
 
 
+# Годы, которые принимаются за даты, а не за величины.
+_YEARS = range(1900, 2101)
+
+
+def _years(points) -> bool:
+    """Значения ряда — возрастающие целые годы: это время, а не величина."""
+    values = [point.value for point in points]
+    return (
+        len(values) > 1
+        and all(value == int(value) and int(value) in _YEARS for value in values)
+        and values == sorted(values)
+        and len(set(values)) == len(values)
+    )
+
+
 class IngestError(ValueError):
     """Вход пуст или не читается."""
 
@@ -247,6 +262,12 @@ def to_pack(
         ):
             dropped["series"] += 1
             warnings.append(f"ряд «{item.name}» отброшен — значения повторяют подписи")
+            continue
+        # Годы вместо величин: «Этапы развития» 2023…2026 с подписями-этапами
+        # (питч Fibonacci, run 38) — столбцы высотой в год.
+        if _years(item.points):
+            dropped["series"] += 1
+            warnings.append(f"ряд «{item.name}» отброшен — значения — годы, а не величины")
             continue
         series.append(
             Series(

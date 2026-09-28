@@ -172,3 +172,76 @@ def test_long_unit_stays_in_the_caption():
     """«100 000 пользователей» — число крупно, «пользователей» — в подписи."""
     fact = next(fact for fact in _pack().facts if fact.id == "f7")
     assert figure_text(fact, "ru") == "100 000"
+
+
+def test_nested_market_series_becomes_kpis():
+    """TAM/SAM/SOM рядом: на столбцах виден один TAM — показатели, число компактно."""
+    from deckwright.schemas import NumericPoint, Series
+
+    pack = _pack()
+    market = Series(
+        id="s9", name="Объём рынка", unit="руб", source_doc_id="d1",
+        points=[NumericPoint(label="TAM (мировой)", value=160e9),
+                NumericPoint(label="SAM (российский)", value=630e6),
+                NumericPoint(label="SOM (достигнутый)", value=30e6)],
+    )
+    pack = pack.model_copy(update={"series": [*pack.series, market]})
+    plan = _plan(
+        {
+            "intent": "evidence",
+            "takeaway_title": "Рынок 160 млрд ₽",
+            "blocks": [{"id": "b1", "kind": "series", "series_ids": ["s9"]}],
+        }
+    )
+    shaped, _ = shape_data(plan, pack)
+    blocks = shaped.slides[1].blocks
+    assert [block.kind for block in blocks] == [BlockKind.KPI] * 3
+    assert [block.heading for block in blocks] == [
+        "160 млрд руб", "630 млн руб", "30 млн руб",
+    ]
+    assert blocks[0].items == ["TAM (мировой)"]
+
+
+def test_parts_and_dynamics_stay_charts():
+    """Доли и динамика — графиком, даже если убывают в десять раз."""
+    plan = _plan(
+        {
+            "intent": "ask",
+            "takeaway_title": "Средства — на разработку и маркетинг",
+            "blocks": [{"id": "b1", "kind": "series", "series_ids": ["s1"]}],
+        }
+    )
+    shaped, _ = shape_data(plan, _pack())
+    assert shaped.slides[1].blocks[0].kind is BlockKind.SERIES
+
+
+def test_same_series_twice_on_a_slide_is_one_chart():
+    """Модель сослалась на один ряд двумя блоками — второй график не нужен."""
+    plan = _plan(
+        {
+            "intent": "ask",
+            "takeaway_title": "Запрашиваем 4 млн ₽",
+            "blocks": [
+                {"id": "b1", "kind": "series", "series_ids": ["s1"]},
+                {"id": "b2", "kind": "series", "series_ids": ["s1"], "fact_ids": ["f18", "f19"]},
+            ],
+        }
+    )
+    shaped, _ = shape_data(plan, _pack())
+    assert [block.id for block in shaped.slides[1].blocks] == ["b1"]
+
+
+def test_parts_from_facts_do_not_repeat_the_chart_already_there():
+    plan = _plan(
+        {
+            "intent": "ask",
+            "takeaway_title": "Запрашиваем 4 млн ₽",
+            "blocks": [
+                {"id": "b1", "kind": "series", "series_ids": ["s1"]},
+                {"id": "b2", "kind": "bullets", "items": ["разработка", "маркетинг"],
+                 "fact_ids": ["f18", "f19"]},
+            ],
+        }
+    )
+    shaped, _ = shape_data(plan, _pack())
+    assert [block.kind for block in shaped.slides[1].blocks] == [BlockKind.SERIES]

@@ -20,6 +20,8 @@ kpi с заголовком «Объём рынка» и тремя строка
 
 from __future__ import annotations
 
+from itertools import pairwise
+
 from deckwright.schemas import (
     BlockKind,
     ContentBlock,
@@ -59,7 +61,19 @@ def shape_data(plan: DeckPlan, pack: ContentPack) -> tuple[DeckPlan, ContentPack
             continue
         shapeable = [block for block in slide.blocks if block.kind in _SHAPEABLE]
         blocks: list[ContentBlock] = []
+        charted: set[tuple[str, ...]] = set()
         for block in slide.blocks:
+            # Тот же ряд вторым блоком — второй такой же график: модель
+            # сослалась на «Распределение инвестиций» дважды (run 38, прогон 3).
+            if block.kind is BlockKind.SERIES and block.series_ids:
+                key = tuple(block.series_ids)
+                if key in charted:
+                    continue
+                charted.add(key)
+            nested = _nested(block, series)
+            if nested is not None:
+                blocks.extend(_point_kpis(block, nested, language))
+                continue
             if block.kind not in _SHAPEABLE:
                 blocks.append(block)
                 continue
@@ -98,6 +112,13 @@ def shape_data(plan: DeckPlan, pack: ContentPack) -> tuple[DeckPlan, ContentPack
             heading = block.heading.strip()
             if heading and not any(char.isdigit() for char in heading) and not slide.subtitle:
                 slide.subtitle = heading
+            shaped = [
+                block
+                for block in shaped
+                if block.kind is not BlockKind.SERIES
+                or tuple(block.series_ids) not in charted
+            ]
+            charted |= {tuple(b.series_ids) for b in shaped if b.kind is BlockKind.SERIES}
             blocks.extend(shaped)
             _declare(slide, shaped)
         slide.blocks = blocks
@@ -117,6 +138,54 @@ def figure_text(fact: Fact, language: str) -> str:
         return number
     glue = "" if unit[0] in "%/" else " "
     return f"{number}{glue}{unit}"
+
+
+# Во сколько раз первая из убывающих величин больше последней, чтобы они
+# были вложенными (TAM ⊃ SAM ⊃ SOM), а не сравнимыми.
+NESTED_RATIO = 10
+
+
+def _nested(block: ContentBlock, series: list[Series]) -> Series | None:
+    """Ряд блока из вложенных величин: столбцами их не показать.
+
+    TAM 160 млрд, SAM 630 млн, SOM 30 млн (питч Fibonacci, run 38): на
+    столбчатой диаграмме виден один TAM, остальные — полоски в пиксель.
+    Три-четыре убывающие величины с разбросом от десяти раз — показатели.
+    """
+    if block.kind is not BlockKind.SERIES or len(block.series_ids) != 1:
+        return None
+    item = next((s for s in series if s.id == block.series_ids[0]), None)
+    if item is None or item.shape in (SeriesShape.TIME, SeriesShape.PARTS):
+        return None
+    values = item.values
+    if not KPI_MIN + 1 <= len(values) <= KPI_MAX or min(values) <= 0:
+        return None
+    falling = all(a > b for a, b in pairwise(values))
+    return item if falling and values[0] >= NESTED_RATIO * values[-1] else None
+
+
+def _point_kpis(block: ContentBlock, item: Series, language: str) -> list[ContentBlock]:
+    """Точки ряда — показателями: число компактно, подпись — точка ряда."""
+    return [
+        ContentBlock(
+            id=f"{block.id}_k{number}",
+            kind=BlockKind.KPI,
+            heading=compact(point.value, item.unit, language),
+            items=[point.label],
+        )
+        for number, point in enumerate(item.points)
+    ]
+
+
+_SCALES = ((1e9, "млрд"), (1e6, "млн"), (1e3, "тыс."))
+
+
+def compact(value: float, unit: str, language: str) -> str:
+    """«160 млрд руб» вместо «160 000 000 000 руб»: порядок — словом."""
+    scale, word = next(((s, w) for s, w in _SCALES if abs(value) >= s * 10), (1, ""))
+    number = format_value(value / scale, [value / scale], language)
+    tail = " ".join(part for part in (word, unit.strip()) if part)
+    return f"{number}\u00a0{tail}" if tail else number
 
 
 def _kpis(

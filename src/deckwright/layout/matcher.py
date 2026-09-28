@@ -666,6 +666,13 @@ def _blocks_fit(
         )
         if not all(fit.fits for fit in fits):
             return False
+        # Мельче этого текст не читается ни в каком варианте: пункты питча
+        # Fibonacci садились в ячейки рыбной таблицы и подписи диаграммы
+        # Ганта `vk_tech` кеглем 4 pt — у шкалы шаблона такой низ, и ступень
+        # «хоть как-то» это принимала. Не влезает крупнее — другая
+        # композиция или деление слайда.
+        if any(fit.size_pt < LEGIBLE_FLOOR_PT for fit in fits):
+            return False
         # Порог — ступень шкалы под типичным кеглем роли, одна для всех
         # вариантов. Ровно типичный недостижим для плотного (старт на
         # ступень ниже), со сдвигом вверх — для воздушного. Строгая ступень
@@ -691,6 +698,8 @@ def _blocks_fit(
 
 # Доля типичного кегля роли, мельче которой текст уже не читается с экрана.
 _LEGIBLE_SHARE = 0.6
+# Абсолютный низ: мельче текст на слайде не читается, какая бы ни была шкала.
+LEGIBLE_FLOOR_PT = 9.0
 
 
 def pick_pattern(
@@ -891,8 +900,15 @@ def pick_pattern(
     # сначала все ступени без композиции соседа, и только если нигде — с ней.
     # Запасной выбор ниже её не исключает: там она бывает единственной, где у
     # каждого блока своё место.
+    # Композиции соседних вариантов — так же: сначала без них (A12: варианты
+    # различимы), потом с ними. Ключ «избегать чужих» в `best_of` работал
+    # только внутри одной ступени, и на питче Fibonacci dense и balanced
+    # совпали на всех шестнадцати слайдах.
+    fresh_pool = [p for p in pool if p.id != previous and p.id not in avoid]
     others = [pattern for pattern in pool if pattern.id != previous] if previous else []
-    for candidates in [others, pool] if others else [pool]:
+    passes = [fresh_pool, others, pool]
+    passes = [group for n, group in enumerate(passes) if group and group not in passes[:n]]
+    for candidates in passes:
         for tier in (typical, readable, None):
             for spread in (True, False):
                 roomy = fitting(
@@ -3152,6 +3168,19 @@ def build_slide_ir(
                         plan_slide.index, seat_id, seat_box, fit, f"блок {block.id!r}"
                     )
                 )
+            elif fit is not None and fit.size_pt < LEGIBLE_FLOOR_PT and any(text):
+                # Влезло, но кеглем, которого не прочитать: запасной выбор,
+                # когда ни одна композиция не держит блоки читаемо. Это то же
+                # «не помещается» — слайд делится (`_slides_for`), аудит видит.
+                issue = _overflow_issue(
+                    plan_slide.index, seat_id, seat_box, fit, f"блок {block.id!r}"
+                )
+                issue.message = (
+                    f"блок {block.id!r} помещается только кеглем {fit.size_pt:g} pt, "
+                    f"мельче читаемого ({LEGIBLE_FLOOR_PT:g} pt): занято {fit.lines} "
+                    f"строк из {fit.capacity_lines}"
+                )
+                issues.append(issue)
             style = TextStyle(
                 font_family=font_family,
                 size_pt=fit.size_pt if fit is not None else starts[number],
@@ -3781,6 +3810,8 @@ def _slides_for(
             used + Counter([slide.pattern_id or ""]),
             pack,
             avoid,
+            # Половины — соседние слайды: вторая не в композиции первой.
+            previous=halves[-1].pattern_id if halves else previous,
         )
         # Идентификаторы элементов обязаны остаться уникальными в колоде.
         for element in built.all_elements():
