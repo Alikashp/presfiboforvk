@@ -26,7 +26,7 @@ import queue
 import re
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TypeVar
 
 from openai import (
@@ -65,6 +65,15 @@ class StepUsage:
     # Последняя ошибка проверки ответа: повтор стоит целого вызова, и без
     # причины его не устранить.
     last_error: str = ""
+    # Повторы после ответа не по схеме, время всех вызовов шага и сколько из
+    # него — ожидание места в минутном лимите токенов. Прогон на сайте
+    # (run-20260928-121651-876): план 132 с — без этих трёх чисел не сказать,
+    # повторы это, ожидание лимита или медленный ответ.
+    retries: int = 0
+    seconds: float = 0.0
+    waited_seconds: float = 0.0
+    # Длительность каждого вызова по порядку, с ожиданием.
+    call_seconds: list[float] = field(default_factory=list)
 
 
 _SCHEMA_INSTRUCTION = (
@@ -164,6 +173,8 @@ class LiveClient:
         # решать, что сокращать, можно только по ответу каждого шага отдельно.
         self.by_step: dict[str, StepUsage] = {}
         self._step_lock = threading.Lock()
+        # Клиенты провайдеров, заданных агентами: {(адрес, ключ): клиент}.
+        self._providers: dict[tuple[str, str], OpenAI] = {}
         self.limiter = RateLimiter(
             tokens_per_minute=cfg.tokens_per_minute,
             requests_per_minute=cfg.requests_per_minute,
@@ -171,6 +182,28 @@ class LiveClient:
         # Последний сырой ответ: нужен диагностике `deckwright probe`, чтобы
         # показать, что именно вернул endpoint, а не пересказ.
         self.last_raw = ""
+
+    def _client_for(self, step: str) -> OpenAI:
+        """Клиент провайдера шага: свой у агента с `base_url`, иначе endpoint'а.
+
+        Провайдер переключается файлом агента: адрес и ключ из `.env`, код тот
+        же. Клиенты по адресам держатся один раз — соединения переиспользуются.
+        """
+        params = self._cfg.step(step)
+        if not params.base_url:
+            return self._client
+        key = (params.base_url, params.api_key or self._cfg.api_key)
+        with self._step_lock:
+            client = self._providers.get(key)
+            if client is None:
+                client = OpenAI(
+                    base_url=key[0],
+                    api_key=key[1],
+                    timeout=self._cfg.timeout_seconds,
+                    max_retries=self._cfg.max_retries,
+                )
+                self._providers[key] = client
+        return client
 
     def _attempts(self, step: str) -> int:
         """Попыток на шаг: предел агента, иначе endpoint'а."""
@@ -226,10 +259,14 @@ class LiveClient:
 
     def _ask(self, step: str, messages: list[dict], estimated: int = 0) -> str:
         params = self._cfg.step(step)
+        queued = time.monotonic()
         entry = self.limiter.acquire(estimated) if self.limiter.enabled else None
         started = time.monotonic()
+        with self._step_lock:
+            self.by_step.setdefault(step, StepUsage()).waited_seconds += started - queued
+        provider = self._client_for(step)
         try:
-            response = self._client.chat.completions.create(
+            response = provider.chat.completions.create(
                 model=params.model or self._cfg.model,
                 messages=messages,
                 temperature=params.temperature,
@@ -248,7 +285,7 @@ class LiveClient:
                 raise
             # Провайдер не знает параметр: забываем его и пробуем ещё раз.
             self.dropped_params.add(rejected)
-            response = self._client.chat.completions.create(
+            response = provider.chat.completions.create(
                 model=params.model or self._cfg.model,
                 messages=messages,
                 temperature=params.temperature,
@@ -270,6 +307,8 @@ class LiveClient:
             record.slowest_seconds = max(
                 record.slowest_seconds, round(time.monotonic() - started, 3)
             )
+            record.seconds += time.monotonic() - queued
+            record.call_seconds.append(round(time.monotonic() - queued, 1))
         actual = 0
         if usage is not None:
             self.prompt_tokens += getattr(usage, "prompt_tokens", 0) or 0
@@ -357,6 +396,7 @@ class LiveClient:
                 self.retries += 1
                 with self._step_lock:
                     record = self.by_step.setdefault(step, StepUsage())
+                    record.retries += 1
                     record.last_error = " ".join(last_error.split())[:300]
                 messages = [
                     *messages,

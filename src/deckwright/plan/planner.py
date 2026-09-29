@@ -173,7 +173,8 @@ def build_plan(
     )
     plan = client.complete(step=prompt.step, prompt=text, schema=_bounded(min_slides))
     plan = DeckPlan.model_validate(plan.model_dump())
-    return fill_or_drop(resolve_facts(resolve_quotes(plan, pack), pack), pack), prompt, budget
+    plan = drop_unfounded(resolve_facts(resolve_quotes(plan, pack), pack), pack)
+    return fill_or_drop(plan, pack), prompt, budget
 
 
 def _bounded(min_slides: int) -> type[DeckPlan]:
@@ -311,7 +312,92 @@ def fill_or_drop(plan: DeckPlan, pack: ContentPack) -> DeckPlan:
                 )
             ]
         kept.append(slide)
+    # Два финала подряд — «Инвестируйте…» с контактами и пустое «Спасибо за
+    # внимание!» (питч Fibonacci, run 38): пустой уходит. Колода и так бывает
+    # на пределе ТЗ, а деление слайдов добавляет своё.
+    closings = [slide for slide in kept if slide.intent is SlideIntent.CLOSING]
+    if len(closings) > 1:
+        bare = [slide for slide in closings if not slide.blocks]
+        drop = bare[: len(closings) - 1] if len(bare) < len(closings) else bare[:-1]
+        kept = [slide for slide in kept if all(slide is not other for other in drop)]
     for number, slide in enumerate(kept, start=1):
         slide.index = number
     plan.slides = kept
     return plan
+
+
+# Целые до этого числа в тексте — счёт («три этапа»), а не факт; как в
+# сверке входа (`content.ingest.SMALL_COUNT`).
+_SMALL_COUNT = 10
+
+
+def drop_unfounded(plan: DeckPlan, pack: ContentPack) -> DeckPlan:
+    """Пункт с числом или адресом, которых во входе нет, в колоду не идёт.
+
+    Живой план питча Fibonacci (run 38, прогон 1): на финале — «email@
+    example.com», «+7 (999) 000-00-00», «Сайт: fibonacci-ai.com». Контакты
+    в PDF есть, но в пакет не попали, и модель подставила заглушки. Аудит
+    находил число (`content.undeclared_number`), а слайд уходил с ним. Здесь
+    — до вёрстки: сверка с пакетом, по тем же правилам, что у аудита.
+    """
+    from deckwright.content.grounding import normalize, source_numbers, ungrounded
+
+    sources = [pack.brief.topic, pack.brief.request, pack.brief.goal, pack.brief.audience]
+    for fact in pack.facts:
+        sources.append(fact.text)
+        if fact.value is not None:
+            sources.append(f"{fact.value:g}")
+    for series in pack.series:
+        sources.append(series.name)
+        sources += [f"{point.label} {point.value:g}" for point in series.points]
+    sources += [quote.text for quote in pack.quotes]
+    corpus = normalize("\n".join(sources))
+    grounded = source_numbers("\n".join(sources))
+    # Телефон — не величина: сверка чисел прощает 999 при 1000 во входе.
+    # Номер сверяется целиком, последовательностью цифр.
+    digit_runs = ["".join(char for char in text if char.isdigit()) for text in sources if text]
+    facts = {fact.id for fact in pack.facts}
+
+    plan = plan.model_copy(deep=True)
+    for slide in plan.slides:
+        allowed = set(grounded)
+        for figure in slide.figures:
+            if any(fact_id in facts for fact_id in figure.fact_ids):
+                allowed |= source_numbers(figure.text)
+        for block in slide.blocks:
+            if block.kind not in _TEXT_BLOCKS:
+                continue
+            block.items = [
+                item
+                for item in block.items
+                if not ungrounded(item, allowed, _SMALL_COUNT)
+                and not _unknown_number(item, digit_runs)
+                and not any(
+                    _address(token) and normalize(token) not in corpus for token in item.split()
+                )
+            ]
+        slide.blocks = [
+            block for block in slide.blocks if block.items or block.kind not in _TEXT_BLOCKS
+        ]
+    return plan
+
+
+# Столько цифр в пункте — это номер (телефон, счёт), а не величина.
+_PHONE_DIGITS = 10
+
+
+def _unknown_number(item: str, digit_runs: list[str]) -> bool:
+    """Номер из 10+ цифр, которого нет ни в одном источнике целиком."""
+    digits = "".join(char for char in item if char.isdigit())
+    return len(digits) >= _PHONE_DIGITS and not any(digits in run for run in digit_runs)
+
+
+def _address(token: str) -> bool:
+    """Почта, ник, ссылка или домен: «@», «://» или латинское «имя.зона»."""
+    token = token.strip(".,;:()«»\"'")
+    if "@" in token or "://" in token:
+        return True
+    name, dot, zone = token.rpartition(".")
+    return bool(dot) and zone.isascii() and zone.isalpha() and len(zone) >= 2 and any(
+        char.isalpha() and char.isascii() for char in name
+    )

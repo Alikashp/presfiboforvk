@@ -159,6 +159,10 @@ class RunSummary(BaseModel):
     # собираются и проверяются параллельно — у этих этапов берётся самый
     # долгий вариант, а не сумма.
     stages: dict[str, float] = Field(default_factory=dict)
+    # Вызовы модели по этапам (`pipeline.model_stages`): число вызовов,
+    # повторов после ответа не по схеме, время вызовов и из него — ожидание
+    # минутного лимита токенов, длительность каждого вызова.
+    model_stages: dict[str, dict[str, object]] = Field(default_factory=dict)
 
     @property
     def within_budget(self) -> bool:

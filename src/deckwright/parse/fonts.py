@@ -120,9 +120,27 @@ def _library() -> ctypes.CDLL:
 
 
 def _utf16(pointer, size_bytes: int) -> str:
+    """Имя из заголовка EOT: без завершающего и любого другого нулевого символа.
+
+    Размер имени в EOT бывает с завершающим нулём, а бывает имя, забитое
+    нулями до длины поля: шаблон «Презентация 2.0» падал на разборе с
+    `ValueError: embedded null byte` — ноль из имени шрифта попадал в путь.
+    """
     if not pointer or size_bytes <= 0:
         return ""
-    return "".join(chr(pointer[i]) for i in range(size_bytes // 2))
+    return "".join(chr(pointer[i]) for i in range(size_bytes // 2)).replace("\x00", "").strip()
+
+
+# Символы, которых не бывает в имени файла: разделители путей, управляющие,
+# запрещённые в Windows. Имя шрифта из файла шаблона — чужие данные.
+_UNSAFE = frozenset('/\\:*?"<>|') | {chr(code) for code in range(32)} | {"\x7f"}
+
+
+def safe_name(name: str, fallback: str = "font") -> str:
+    """Имя, пригодное для файла или каталога: без нулей, разделителей и точек в начале."""
+    cleaned = "".join("_" if char in _UNSAFE or char.isspace() else char for char in name)
+    cleaned = cleaned.strip("._")
+    return cleaned[:100] or fallback
 
 
 def eot_to_ttf(data: bytes) -> tuple[bytes, str, str]:
@@ -158,26 +176,33 @@ def extract_embedded_fonts(
 
     Неудача по одному шрифту не отменяет остальные: лучше иметь верные метрики
     для трёх начертаний из четырёх, чем ни для одного.
+
+    Ни один шрифт не роняет разбор: битый архив, имя с нулём, запрет записи —
+    шрифт пропускается с предупреждением, вёрстка идёт по метрикам замены.
     """
-    template_path, target_dir = Path(template_path), Path(target_dir)
-    target_dir.mkdir(parents=True, exist_ok=True)
+    template_path = Path(template_path)
+    target_dir = Path(target_dir)
+    target_dir = target_dir.parent / safe_name(target_dir.name, "template")
 
     fonts: list[ExtractedFont] = []
     warnings: list[str] = []
-
-    with zipfile.ZipFile(template_path) as package:
-        entries = [name for name in package.namelist() if name.startswith("ppt/fonts/")]
-        for entry in sorted(entries):
-            try:
-                ttf, family, style = eot_to_ttf(package.read(entry))
-            except FontExtractionError as exc:
-                warnings.append(f"{entry}: {exc}")
-                continue
-            if not family:
-                warnings.append(f"{entry}: распаковался, но без имени семейства")
-                continue
-            path = target_dir / f"{family}-{style or 'Regular'}.ttf".replace(" ", "_")
-            path.write_bytes(ttf)
-            fonts.append(ExtractedFont(family=family, style=style or "Regular", path=path))
-
+    try:
+        target_dir.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(template_path) as package:
+            entries = sorted(n for n in package.namelist() if n.startswith("ppt/fonts/"))
+            for entry in entries:
+                try:
+                    ttf, family, style = eot_to_ttf(package.read(entry))
+                    if not family:
+                        warnings.append(f"{entry}: распаковался, но без имени семейства")
+                        continue
+                    style = style or "Regular"
+                    path = target_dir / f"{safe_name(family)}-{safe_name(style, 'Regular')}.ttf"
+                    path.write_bytes(ttf)
+                except (FontExtractionError, OSError, ValueError, zipfile.BadZipFile) as exc:
+                    warnings.append(f"{entry}: шрифт пропущен — {exc}")
+                    continue
+                fonts.append(ExtractedFont(family=family, style=style, path=path))
+    except (OSError, ValueError, zipfile.BadZipFile) as exc:
+        warnings.append(f"встроенные шрифты не извлечены — {exc}")
     return fonts, warnings

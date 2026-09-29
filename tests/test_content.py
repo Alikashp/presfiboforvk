@@ -156,6 +156,27 @@ def test_series_whose_values_repeat_labels_is_dropped():
     assert any("повторяют подписи" in warning for warning in result.warnings)
 
 
+def test_series_of_years_is_dropped():
+    """«Этапы развития»: подписи — этапы, значения — 2023…2026 (run 38)."""
+    pdf = Path(__file__).parent / "fixtures" / "fibonacci_pitch" / "fibonacci_ai.pdf"
+    stages = ["Выход на рынок", "MVP", "Международный рынок", "Инвестиции"]
+    client = StubClient(
+        {
+            "topic": "Fibonacci AI",
+            "purpose": "product",
+            "series": [
+                {"name": "Этапы развития", "doc_id": "d1", "unit": "год", "points": [
+                    {"label": label, "value": year}
+                    for label, year in zip(stages, (2023, 2024, 2025, 2026), strict=True)
+                ]},
+            ],
+        }
+    )
+    result = ingest(IngestInput(files=[pdf]), client)
+    assert result.pack.series == []
+    assert any("годы" in warning for warning in result.warnings)
+
+
 def test_invented_numbers_are_dropped_with_their_facts(inputs):
     """Модель вернула факт с числом, которого во входе нет: он не доходит до пакета."""
     client = StubClient(
@@ -415,3 +436,41 @@ def test_slide_without_blocks_is_filled_from_its_figures_or_dropped():
     assert [slide.takeaway_title for slide in slides] == ["Рынок растёт", "Инвестируйте"]
     assert [slide.index for slide in slides] == [1, 2]
     assert slides[0].blocks[0].items == ["Рынок EdTech — 630 млн рублей"]
+
+
+def test_invented_contacts_do_not_reach_the_deck():
+    """Живой план r1 (run 38): заглушки контактов на финале снимаются до вёрстки."""
+    from deckwright.plan.planner import drop_unfounded
+    from deckwright.schemas import DeckPlan
+
+    live = Path(__file__).parent / "fixtures" / "pitch_live"
+    pack = ContentPack.model_validate(json.loads((live / "r1" / "pack.json").read_text("utf-8")))
+    plan = DeckPlan.model_validate(
+        json.loads((live / "r1" / "recorded" / "plan_deck.json").read_text("utf-8"))
+    )
+    closing = drop_unfounded(plan, pack).slides[-1]
+    items = [item for block in closing.blocks for item in block.items]
+    assert items == ["Александрина Шпагина, CEO"]
+    # Настоящий номер из входа остаётся (r3: он есть в пакете).
+    pack3 = ContentPack.model_validate(json.loads((live / "r3" / "pack.json").read_text("utf-8")))
+    plan3 = DeckPlan.model_validate(
+        json.loads((live / "r3" / "recorded" / "plan_deck.json").read_text("utf-8"))
+    )
+    texts = [i for s in drop_unfounded(plan3, pack3).slides for b in s.blocks for i in b.items]
+    assert any("439 01 79" in text for text in texts)
+
+
+def test_second_bare_closing_is_dropped():
+    """План r3 (run 38): «Инвестируйте…» и пустое «Спасибо» — остаётся один финал."""
+    from deckwright.plan.planner import fill_or_drop
+    from deckwright.schemas import DeckPlan, SlideIntent
+
+    live = Path(__file__).parent / "fixtures" / "pitch_live" / "r3"
+    pack = ContentPack.model_validate(json.loads((live / "pack.json").read_text("utf-8")))
+    plan = DeckPlan.model_validate(
+        json.loads((live / "recorded" / "plan_deck.json").read_text("utf-8"))
+    )
+    slides = fill_or_drop(plan, pack).slides
+    closings = [slide for slide in slides if slide.intent is SlideIntent.CLOSING]
+    assert len(closings) == 1 and closings[0].blocks
+    assert [slide.index for slide in slides] == list(range(1, len(slides) + 1))

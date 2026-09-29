@@ -44,10 +44,26 @@ from deckwright.schemas import (
 MAX_CHARS = 24_000
 # Сколько фактов просить. Ответ модели — самая долгая часть разбора входа:
 # 34 факта с местами на docx-отчёте стоили 82 с из 300 на колоду. Двадцати
-# хватает на 10–15 слайдов: на слайд идёт один-два факта.
-MAX_FACTS = 20
+# не хватило питчу Fibonacci: все двадцать ушли на цифры, команда, конкуренты
+# и этапы из пакета выпали. Тридцать — два факта на слайд колоды из 15.
+MAX_FACTS = 30
 # Целые до этого числа в тексте факта — счёт («три этапа»), а не факт.
 SMALL_COUNT = 10
+
+
+# Годы, которые принимаются за даты, а не за величины.
+_YEARS = range(1900, 2101)
+
+
+def _years(points) -> bool:
+    """Значения ряда — возрастающие целые годы: это время, а не величина."""
+    values = [point.value for point in points]
+    return (
+        len(values) > 1
+        and all(value == int(value) and int(value) in _YEARS for value in values)
+        and values == sorted(values)
+        and len(set(values)) == len(values)
+    )
 
 
 class IngestError(ValueError):
@@ -246,6 +262,12 @@ def to_pack(
         ):
             dropped["series"] += 1
             warnings.append(f"ряд «{item.name}» отброшен — значения повторяют подписи")
+            continue
+        # Годы вместо величин: «Этапы развития» 2023…2026 с подписями-этапами
+        # (питч Fibonacci, run 38) — столбцы высотой в год.
+        if _years(item.points):
+            dropped["series"] += 1
+            warnings.append(f"ряд «{item.name}» отброшен — значения — годы, а не величины")
             continue
         series.append(
             Series(

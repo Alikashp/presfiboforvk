@@ -199,6 +199,11 @@ def fit_paragraphs(
     )
 
 
+def _is_data(block) -> bool:
+    """Показатель, ряд или таблица — данные, а не текст."""
+    return getattr(getattr(block, "kind", None), "value", "") in ("kpi", "series", "table")
+
+
 def split_blocks(blocks: list, parts: int = 2) -> list[list]:
     """Делит блоки слайда на несколько слайдов, не разрывая блок.
 
@@ -208,6 +213,14 @@ def split_blocks(blocks: list, parts: int = 2) -> list[list]:
     """
     if parts < 2 or len(blocks) < parts:
         return [blocks]
+    # Текст и данные — разными слайдами, если на слайде есть и то и другое:
+    # «три пункта + два показателя» питча Fibonacci пополам по счёту давали
+    # «пункты + показатель» и «показатель», и обе половины не влезали ни в
+    # одну композицию `vk_tech`; список — в карточки, два числа — рядом.
+    data = [block for block in blocks if _is_data(block)]
+    text = [block for block in blocks if not _is_data(block)]
+    if parts == 2 and data and text:
+        return [text, data]
     size = -(-len(blocks) // parts)  # округление вверх
     chunks = [blocks[i : i + size] for i in range(0, len(blocks), size)]
     return [chunk for chunk in chunks if chunk]
